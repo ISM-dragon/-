@@ -31,6 +31,7 @@ import com.example.data.model.DirectApiPublishLog
 import com.example.data.model.DirectPlatformApiCredentials
 import com.example.data.model.GoogleFlowCreditInfo
 import com.example.data.model.Project
+import com.example.data.model.PipelineCheckpointEntity
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.SocialPostCopy
@@ -38,9 +39,14 @@ import com.example.data.model.UserCreditState
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
+import com.example.data.remote.SpeechToTextService
+import com.example.data.video.CaptionSidecarWriter
 import com.example.data.video.FaceTrackingAnalyzer
+import com.example.data.video.LocalMediaAnalyzer
 import com.example.data.video.Media3VideoProcessor
 import com.example.data.worker.VideoProcessingWorker
+import com.example.domain.analysis.AnalysisValidator
+import com.example.domain.analysis.Transcript
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -84,6 +90,8 @@ class OpusRepository(context: Context) {
     private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
     val geminiService = GeminiClipService(appContext)
     private val videoProcessor = Media3VideoProcessor(appContext)
+    private val localMediaAnalyzer = LocalMediaAnalyzer(appContext)
+    private val speechToTextService = SpeechToTextService(appContext)
     private val faceTrackingAnalyzer = FaceTrackingAnalyzer(appContext)
     val aiRouter = com.example.domain.ai.IntelligentAiRouter(
         listOf(
@@ -687,6 +695,19 @@ class OpusRepository(context: Context) {
     suspend fun clearAllRepurposingHistory() = withContext(Dispatchers.IO) {
         repurposingHistoryDao.clearAllHistory()
     }
+
+    suspend fun transcribeLocalMediaDetailed(sourceUrl: String, language: String? = null): Result<Transcript> = withContext(Dispatchers.IO) {
+        val uri = sourceUrl.toMediaUriOrNull()
+            ?: return@withContext Result.failure(IllegalArgumentException("مصدر transcription يجب أن يكون Uri محليًا."))
+        val sttKey = _aiProviders.value.firstOrNull {
+            it.isEnabled && it.apiKey.isNotBlank() &&
+                (it.providerType == AiProviderType.OPENAI.name || it.providerType == AiProviderType.GROQ.name)
+        }?.apiKey.orEmpty()
+        speechToTextService.transcribe(uri, sttKey, language)
+    }
+
+    suspend fun transcribeLocalMedia(sourceUrl: String, language: String? = null): Result<String> =
+        transcribeLocalMediaDetailed(sourceUrl, language).map { it.text }
 
     suspend fun processNewVideo(
         title: String,
