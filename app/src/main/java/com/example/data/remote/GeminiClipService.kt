@@ -1169,6 +1169,18 @@ class GeminiClipService {
         captionText: String,
         credentials: DirectPlatformApiCredentials
     ): DirectApiPublishLog = withContext(Dispatchers.IO) {
+        if (!credentials.isDirectApiEnabled) {
+            return@withContext DirectApiPublishLog(
+                platform = platform,
+                isSuccess = false,
+                httpCode = 0,
+                endpointUrl = "",
+                responseSummary = "Direct API publishing is disabled in settings.",
+                postUrl = "",
+                rawPayload = ""
+            )
+        }
+
         val endpointUrl = when (platform) {
             "YouTube Shorts" -> "https://www.googleapis.com/youtube/v3/videos"
             "TikTok" -> "https://open.tiktokapis.com/v2/post/publish/video/init/"
@@ -1251,17 +1263,16 @@ class GeminiClipService {
             }
         }
 
-        // Native In-App Autonomous Publishing Pipeline
-        kotlinx.coroutines.delay(450) // Native dispatch latency
-        val generatedId = (10000000..99999999).random()
+        // No credential means no real platform publish occurred. Never report a
+        // synthetic success or fabricate a post URL.
         return@withContext DirectApiPublishLog(
             platform = platform,
-            isSuccess = true,
-            httpCode = 200,
+            isSuccess = false,
+            httpCode = 401,
             endpointUrl = endpointUrl,
-            responseSummary = "Native In-App Dispatch Successful (No External Automation / Handshake Complete)",
-            postUrl = getSamplePostUrl(platform, generatedId.toString()),
-            rawPayload = """{"status": "SUCCESS", "platform": "$platform", "published_id": "$generatedId", "mode": "NATIVE_DIRECT_API"}"""
+            responseSummary = "No platform credentials configured; nothing was published.",
+            postUrl = "",
+            rawPayload = ""
         )
     }
 

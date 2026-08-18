@@ -564,7 +564,7 @@ class OpusRepository(context: Context) {
                     captionTheme = "Opus Neon"
                 )
             }
-            clipDao.insertClips(clipEntities)
+            val insertedClipIds = clipDao.insertClips(clipEntities)
 
             // Seed initial video processing cache metadata
             val cacheEntity = VideoProcessingCacheEntity(
@@ -587,7 +587,7 @@ class OpusRepository(context: Context) {
             // Seed granular viral score metrics for clips
             val initialScores = clipsData.mapIndexed { index, clipData ->
                 ViralScoreMetricEntity(
-                    clipId = (index + 1).toLong(),
+                    clipId = insertedClipIds.getOrElse(index) { 0L },
                     projectId = 1,
                     clipTitle = clipData.title,
                     overallViralityScore = clipData.viralityScore,
@@ -633,7 +633,8 @@ class OpusRepository(context: Context) {
         transcriptOrPrompt: String,
         durationMinutes: Int,
         targetPlatform: String,
-        captionTheme: String
+        captionTheme: String,
+        layoutType: String = "9:16 Full Screen"
     ): Long = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
 
@@ -688,11 +689,12 @@ class OpusRepository(context: Context) {
             createClipEntity(
                 projectId = newProjectId,
                 data = clipData,
-                captionTheme = captionTheme
+                captionTheme = captionTheme,
+                layoutType = layoutType
             )
         }
 
-        clipDao.insertClips(clipEntities)
+        val insertedClipIds = clipDao.insertClips(clipEntities)
 
         val processingDurationMs = System.currentTimeMillis() - startTime
 
@@ -717,7 +719,7 @@ class OpusRepository(context: Context) {
         // 2. Cache granular viral score breakdown for each generated clip
         val viralScoreEntities = clipsData.mapIndexed { index, clipData ->
             ViralScoreMetricEntity(
-                clipId = newProjectId * 100 + (index + 1),
+                clipId = insertedClipIds.getOrElse(index) { 0L },
                 projectId = newProjectId,
                 clipTitle = clipData.title,
                 overallViralityScore = clipData.viralityScore,
@@ -783,7 +785,8 @@ class OpusRepository(context: Context) {
     private fun createClipEntity(
         projectId: Long,
         data: ClipGenerationData,
-        captionTheme: String
+        captionTheme: String,
+        layoutType: String = "9:16 Full Screen"
     ): Clip {
         val words = data.transcript.split(" ")
         val duration = maxOf(15, data.endTimeSec - data.startTimeSec)
@@ -838,7 +841,7 @@ class OpusRepository(context: Context) {
             animatedCaptionsJson = animatedWordsAdapter.toJson(animatedWords),
             bRollPromptsJson = bRollAdapter.toJson(data.bRollIdeas),
             socialCopyJson = socialAdapter.toJson(data.socialCopies),
-            layoutType = "9:16 Full Screen",
+            layoutType = layoutType,
             isFavorite = data.viralityScore >= 95
         )
     }
@@ -909,7 +912,13 @@ class OpusRepository(context: Context) {
     }
 
     suspend fun deleteProject(projectId: Long) = withContext(Dispatchers.IO) {
+        val project = projectDao.getProjectByIdSync(projectId)
         clipDao.deleteClipsForProject(projectId)
+        viralScoreMetricDao.deleteScoresForProject(projectId)
+        repurposingHistoryDao.deleteHistoryForProject(projectId)
+        project?.sourceUrl?.takeIf { it.isNotBlank() }?.let { sourceUrl ->
+            videoProcessingCacheDao.deleteCacheByUrl(sourceUrl)
+        }
         projectDao.deleteProjectById(projectId)
     }
 
@@ -990,14 +999,21 @@ class OpusRepository(context: Context) {
         }
 
         val successCount = apiLogs.count { it.isSuccess }
-        val message = if (successCount > 0) {
-            "تم النشر التلقائي المباشر عبر الـ API بنجاح على $successCount من المنصات (${platformsToDispatch.joinToString(" • ")}) بدون الحاجة لأي تطبيقات أو أدوات وسيطة!"
-        } else {
-            "تم تجهيز ونشر الفيديو تلقائياً على ${platformsToDispatch.joinToString(" و ")} بنجاح!"
+        val dispatchSucceeded = successCount > 0 || webhookSuccess
+        val message = when {
+            successCount > 0 -> {
+                "تم النشر التلقائي المباشر عبر الـ API بنجاح على $successCount من المنصات (${platformsToDispatch.joinToString(" • ")}) بدون الحاجة لأي تطبيقات أو أدوات وسيطة!"
+            }
+            webhookSuccess -> {
+                "تم إرسال بيانات النشر إلى webhook بنجاح، لكن لم يتم تأكيد النشر المباشر عبر المنصات."
+            }
+            else -> {
+                "تعذر النشر التلقائي على المنصات المحددة. تم تجهيز النص ونسخه فقط إن كان خيار النسخ مفعلاً."
+            }
         }
 
         return@withContext AutoPublishResult(
-            isSuccess = true,
+            isSuccess = dispatchSucceeded,
             message = message,
             dispatchedPlatforms = platformsToDispatch,
             webhookDispatched = webhookSuccess,

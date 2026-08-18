@@ -59,6 +59,7 @@ class OpusArchitectureCoreTest {
             name = "OpenAI GPT-4o Mini",
             providerType = AiProviderType.OPENAI.name,
             apiKey = "sk-test-12345678",
+            isEnabled = true,
             totalCreditsAllocated = 20.0,
             usedCredits = 5.0
         )

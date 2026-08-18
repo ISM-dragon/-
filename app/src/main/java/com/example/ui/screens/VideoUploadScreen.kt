@@ -900,6 +900,7 @@ fun VideoUploadScreen(
                             try {
                                 var appliedCaptionTheme = selectedCaptionTheme
                                 var appliedLayout = selectedLayout
+                                var appliedPlatform = "TikTok & Reels (9:16)"
 
                                 if (autoDetectAiTemplate) {
                                     try {
@@ -910,7 +911,8 @@ fun VideoUploadScreen(
                                         )
                                         detectedAiRecommendation = aiRec
                                         appliedCaptionTheme = aiRec.recommendedCaptionTheme
-                                        appliedLayout = aiRec.recommendedPlatform
+                                        appliedLayout = aiRec.recommendedLayout
+                                        appliedPlatform = aiRec.recommendedPlatform
                                     } catch (_: Exception) {}
                                 }
 
@@ -919,8 +921,9 @@ fun VideoUploadScreen(
                                     sourceUrl = selectedVideoUri.toString(),
                                     transcriptOrPrompt = "Local uploaded video: $videoTitle",
                                     durationMinutes = calcDurationMin,
-                                    targetPlatform = appliedLayout,
-                                    captionTheme = appliedCaptionTheme
+                                    targetPlatform = appliedPlatform,
+                                    captionTheme = appliedCaptionTheme,
+                                    layoutType = appliedLayout
                                 )
                                 isProcessing = false
                                 Toast.makeText(context, "تم استخراج المقاطع بنجاح عبر Gemini AI!", Toast.LENGTH_SHORT).show()

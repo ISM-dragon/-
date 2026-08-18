@@ -28,6 +28,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Grant Execute Permission to Gradle Wrapper
+        run: chmod +x gradlew
+
       - name: Generate Debug Keystore
         run: |
           keytool -genkey -v -keystore debug.keystore \
@@ -38,7 +41,7 @@ jobs:
             -dname "CN=Android Debug,O=Android,C=US"
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug --no-daemon
 
       - name: Create Git Tag & Release
         uses: softprops/action-gh-release@v2
