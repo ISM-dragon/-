@@ -686,7 +686,7 @@ fun VideoUploadScreen(
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "File validated & ready for Opus Pro AI virality parsing",
+                                        text = "File validated & ready for ISM AI virality parsing",
                                         fontSize = 11.sp,
                                         color = OpusViralEmerald,
                                         fontWeight = FontWeight.SemiBold

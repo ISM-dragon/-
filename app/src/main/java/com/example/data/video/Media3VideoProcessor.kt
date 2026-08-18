@@ -32,7 +32,7 @@ import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
 /**
- * Real on-device video export for Opus Pro.
+ * Real on-device video export for ISM.
  *
  * Gemini supplies the semantic decision (start/end timestamps); Media3 performs
  * the deterministic trim/export. This mirrors PublikClip's separation between

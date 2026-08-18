@@ -84,7 +84,7 @@ fun AutoPublishResultDialog(
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_SUBJECT, clip.title)
-            putExtra(Intent.EXTRA_TEXT, publishResult.postText.ifBlank { "${clip.title}\n\n${clip.transcript}\n\n#Viral #Shorts #OpusClip" })
+            putExtra(Intent.EXTRA_TEXT, publishResult.postText.ifBlank { "${clip.title}\n\n${clip.transcript}\n\n#Viral #Shorts #ISM" })
             if (!packageName.isNullOrBlank()) {
                 setPackage(packageName)
             }
@@ -95,7 +95,7 @@ fun AutoPublishResultDialog(
             val generalIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_SUBJECT, clip.title)
-                putExtra(Intent.EXTRA_TEXT, publishResult.postText.ifBlank { "${clip.title}\n\n${clip.transcript}\n\n#Viral #Shorts #OpusClip" })
+                putExtra(Intent.EXTRA_TEXT, publishResult.postText.ifBlank { "${clip.title}\n\n${clip.transcript}\n\n#Viral #Shorts #ISM" })
             }
             if (!fallbackUrl.isNullOrBlank()) {
                 try {

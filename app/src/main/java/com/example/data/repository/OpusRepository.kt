@@ -30,6 +30,8 @@ import com.example.data.model.DedicatedCaptionResult
 import com.example.data.model.DirectApiPublishLog
 import com.example.data.model.DirectPlatformApiCredentials
 import com.example.data.model.GoogleFlowCreditInfo
+import com.example.data.model.GatewayConfig
+import com.example.data.model.GatewaySnapshot
 import com.example.data.model.Project
 import com.example.data.model.PipelineCheckpointEntity
 import com.example.data.model.ProcessingJobEntity
@@ -40,10 +42,12 @@ import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
 import com.example.data.remote.SpeechToTextService
+import com.example.data.remote.SocialGatewayClient
 import com.example.data.video.CaptionSidecarWriter
 import com.example.data.video.FaceTrackingAnalyzer
 import com.example.data.video.LocalMediaAnalyzer
 import com.example.data.video.Media3VideoProcessor
+import com.example.data.video.MediaUriStabilizer
 import com.example.data.worker.VideoProcessingWorker
 import com.example.domain.analysis.AnalysisValidator
 import com.example.domain.analysis.Transcript
@@ -71,7 +75,7 @@ sealed class ProcessingStep(val stepNumber: Int, val title: String, val descript
     object ScanningHooks : ProcessingStep(2, "Virality Curve Scanning", "Evaluating retention probability, hook tension & emotional peaks...")
     object CalculatingScores : ProcessingStep(3, "Virality Score™ Calculation", "Benchmarking against 10M+ top performing social shorts...")
     object StylingCaptions : ProcessingStep(4, "Dynamic Caption & B-Roll", "Synthesizing karaoke highlights, auto emojis & 9:16 reframe...")
-    object Completed : ProcessingStep(5, "Clips Generated", "Your viral shorts are ready in Opus Clip Studio!")
+    object Completed : ProcessingStep(5, "Clips Generated", "Your viral shorts are ready in ISM Studio!")
 }
 
 class OpusRepository(context: Context) {
@@ -380,6 +384,45 @@ class OpusRepository(context: Context) {
     )
     val directApiCredentials = _directApiCredentials.asStateFlow()
 
+    private val gatewayPrefs = context.getSharedPreferences("ism_gateway_settings", Context.MODE_PRIVATE)
+    private val gatewayClient = SocialGatewayClient()
+    private val _gatewayConfig = MutableStateFlow(
+        GatewayConfig(
+            baseUrl = gatewayPrefs.getString("base_url", "") ?: "",
+            token = readSecret(gatewayPrefs, "gateway_token")
+        )
+    )
+    val gatewayConfig = _gatewayConfig.asStateFlow()
+    private val _gatewaySnapshot = MutableStateFlow<GatewaySnapshot?>(null)
+    val gatewaySnapshot = _gatewaySnapshot.asStateFlow()
+    private val _gatewayError = MutableStateFlow("")
+    val gatewayError = _gatewayError.asStateFlow()
+
+    suspend fun saveGatewayConfig(config: GatewayConfig) = withContext(Dispatchers.IO) {
+        val editor = gatewayPrefs.edit().putString("base_url", config.baseUrl.trim())
+        putSecret(editor, "gateway_token", config.token.trim())
+        editor.apply()
+        _gatewayConfig.value = config.copy(baseUrl = config.baseUrl.trim(), token = config.token.trim())
+        _gatewayError.value = ""
+    }
+
+    suspend fun testGatewayConnection(): Result<String> = withContext(Dispatchers.IO) {
+        val result = gatewayClient.testConnection(_gatewayConfig.value)
+        result.exceptionOrNull()?.let { _gatewayError.value = it.localizedMessage ?: "تعذر الاتصال بـ Gateway" }
+        result
+    }
+
+    suspend fun refreshGatewayStatus(): Result<GatewaySnapshot> = withContext(Dispatchers.IO) {
+        val result = gatewayClient.loadSnapshot(_gatewayConfig.value)
+        result.onSuccess {
+            _gatewaySnapshot.value = it
+            _gatewayError.value = ""
+        }.onFailure {
+            _gatewayError.value = it.localizedMessage ?: "تعذر تحميل حالة Gateway"
+        }
+        result
+    }
+
     private val _recentPublishLogs = MutableStateFlow<List<DirectApiPublishLog>>(emptyList())
     val recentPublishLogs = _recentPublishLogs.asStateFlow()
 
@@ -593,12 +636,23 @@ class OpusRepository(context: Context) {
         require(sourceUri.isNotBlank()) { "مصدر الفيديو مطلوب." }
         require(durationMinutes > 0) { "مدة الفيديو غير صالحة." }
 
+        val parsedSourceUri = Uri.parse(sourceUri)
+        val stableSourceUri = if (parsedSourceUri.scheme == "content" || parsedSourceUri.scheme == "file") {
+            runCatching {
+                MediaUriStabilizer.copyForBackground(appContext, parsedSourceUri, title)
+            }.getOrElse { error ->
+                throw IllegalStateException("تعذر تثبيت ملف الفيديو قبل تشغيل المعالجة: ${error.localizedMessage ?: "مصدر غير قابل للقراءة"}", error)
+            }.toString()
+        } else {
+            sourceUri
+        }
+
         val jobId = UUID.randomUUID().toString()
         processingJobDao.upsert(
             ProcessingJobEntity(
                 jobId = jobId,
                 title = title,
-                sourceUri = sourceUri,
+                sourceUri = stableSourceUri,
                 transcriptOrPrompt = transcriptOrPrompt,
                 durationMinutes = durationMinutes,
                 targetPlatform = targetPlatform,
@@ -609,7 +663,7 @@ class OpusRepository(context: Context) {
         val input = workDataOf(
             VideoProcessingWorker.KEY_JOB_ID to jobId,
             VideoProcessingWorker.KEY_TITLE to title,
-            VideoProcessingWorker.KEY_SOURCE_URI to sourceUri,
+            VideoProcessingWorker.KEY_SOURCE_URI to stableSourceUri,
             VideoProcessingWorker.KEY_TRANSCRIPT to transcriptOrPrompt,
             VideoProcessingWorker.KEY_DURATION_MINUTES to durationMinutes,
             VideoProcessingWorker.KEY_TARGET_PLATFORM to targetPlatform,
@@ -1101,7 +1155,7 @@ class OpusRepository(context: Context) {
             vertical = ratio == com.example.data.video.ExportAspectRatio.VERTICAL_9_16,
             aspectRatio = ratio,
             captionCues = if (burnInSubtitles) decodeCaptionCues(clip) else emptyList(),
-            watermarkText = if (removeWatermark) "" else "Opus Pro",
+            watermarkText = if (removeWatermark) "" else "ISM",
             cropCenterX = trackedCenterX,
             onProgress = onProgress
         )
@@ -1116,7 +1170,7 @@ class OpusRepository(context: Context) {
             put(MediaStore.Video.Media.DISPLAY_NAME, file.name)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Opus Pro")
+                put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/ISM")
                 put(MediaStore.Video.Media.IS_PENDING, 1)
             }
         }
@@ -1242,7 +1296,7 @@ class OpusRepository(context: Context) {
 
         val hook = targetPost?.hook ?: clip.title
         val caption = targetPost?.caption ?: clip.transcript.take(160)
-        val hashtags = targetPost?.hashtags?.joinToString(" ") ?: "#Viral #Shorts #OpusClip"
+        val hashtags = targetPost?.hashtags?.joinToString(" ") ?: "#Viral #Shorts #ISM"
         val fullPostPayload = "$hook\n\n$caption\n\n$hashtags"
 
         // 1. Copy to clipboard if enabled

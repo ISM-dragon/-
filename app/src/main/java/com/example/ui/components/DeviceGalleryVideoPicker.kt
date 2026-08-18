@@ -156,8 +156,14 @@ fun DeviceGalleryVideoPicker(
                     thumbnailBitmap = bmp
                     isLoadingMetadata = false
 
+                    val stableUri = runCatching {
+                        com.example.data.video.MediaUriStabilizer.copyForBackground(context, uri, name)
+                    }.getOrElse {
+                        Toast.makeText(context, "تعذر تجهيز الفيديو للمعالجة الخلفية: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+                        uri
+                    }
                     val data = SelectedVideoData(
-                        uri = uri,
+                        uri = stableUri,
                         fileName = name,
                         fileSizeBytes = size,
                         durationMs = duration,
@@ -188,8 +194,14 @@ fun DeviceGalleryVideoPicker(
                     thumbnailBitmap = bmp
                     isLoadingMetadata = false
 
+                    val stableUri = runCatching {
+                        com.example.data.video.MediaUriStabilizer.copyForBackground(context, uri, name)
+                    }.getOrElse {
+                        Toast.makeText(context, "تعذر تجهيز الفيديو للمعالجة الخلفية: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+                        uri
+                    }
                     val data = SelectedVideoData(
-                        uri = uri,
+                        uri = stableUri,
                         fileName = name,
                         fileSizeBytes = size,
                         durationMs = duration,

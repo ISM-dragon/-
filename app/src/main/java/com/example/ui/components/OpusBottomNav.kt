@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.Key
@@ -44,6 +45,7 @@ enum class OpusNavTab(val label: String, val subtitle: String, val testTag: Stri
     STUDIO("Studio", "Editor & Hooks", "nav_tab_studio"),
     BENCHMARK("VS Benchmark", "Competitors", "nav_tab_benchmark"),
     PROJECTS("Library", "Saved Clips", "nav_tab_projects"),
+    GATEWAY("Social", "Gateway", "nav_tab_gateway"),
     SETTINGS("API Hub", "Keys & Usage", "nav_tab_settings")
 }
 
@@ -167,6 +169,33 @@ fun OpusBottomNav(
                 unselectedTextColor = OpusTextSecondary
             ),
             modifier = Modifier.testTag(OpusNavTab.PROJECTS.testTag)
+        )
+
+        NavigationBarItem(
+            selected = currentTab == OpusNavTab.GATEWAY,
+            onClick = { onTabSelected(OpusNavTab.GATEWAY) },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Cloud,
+                    contentDescription = "Social Gateway",
+                    modifier = Modifier.size(20.dp)
+                )
+            },
+            label = {
+                Text(
+                    text = OpusNavTab.GATEWAY.label,
+                    fontSize = 9.5.sp,
+                    fontWeight = if (currentTab == OpusNavTab.GATEWAY) FontWeight.Bold else FontWeight.Medium
+                )
+            },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = OpusElectricCyan,
+                selectedTextColor = OpusElectricCyan,
+                indicatorColor = OpusPrimaryViolet.copy(alpha = 0.35f),
+                unselectedIconColor = OpusTextSecondary,
+                unselectedTextColor = OpusTextSecondary
+            ),
+            modifier = Modifier.testTag(OpusNavTab.GATEWAY.testTag)
         )
 
         NavigationBarItem(

@@ -107,7 +107,7 @@ fun ComparisonDetailScreen(
                 Spacer(modifier = Modifier.width(4.dp))
 
                 Text(
-                    text = "Compare > Opus Pro vs ${competitor.name}",
+                    text = "Compare > ISM vs ${competitor.name}",
                     fontSize = 11.sp,
                     color = OpusTextSecondary,
                     fontWeight = FontWeight.Medium
@@ -220,7 +220,7 @@ fun ComparisonDetailScreen(
         // Pros & Cons Comparison Grid
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // Opus Pros & Cons
+                // ISMs & Cons
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
@@ -232,7 +232,7 @@ fun ComparisonDetailScreen(
                             Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(OpusElectricCyan))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Opus Pro Strengths & Advantages",
+                                text = "ISM Strengths & Advantages",
                                 style = MaterialTheme.typography.titleSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = OpusElectricCyan
@@ -320,7 +320,7 @@ fun ComparisonDetailScreen(
                     ) {
                         Column {
                             Text(
-                                text = "Choose Opus Pro if:",
+                                text = "Choose ISM if:",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = OpusElectricCyan
@@ -410,7 +410,7 @@ fun ComparisonDetailScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Join 3M+ creators using Opus Pro AI to extract viral hooks in 1 click.",
+                        text = "Join 3M+ creators using ISM AI to extract viral hooks in 1 click.",
                         fontSize = 12.sp,
                         color = OpusTextSecondary,
                         modifier = Modifier.padding(horizontal = 8.dp)
@@ -424,7 +424,7 @@ fun ComparisonDetailScreen(
                     ) {
                         Icon(Icons.Default.Bolt, contentDescription = "Start", tint = OpusGold, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Try Opus Pro Free (60 Mins)", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text("Try ISM Free (60 Mins)", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -474,7 +474,7 @@ private fun CriteriaRow(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = if (item.winner == "opus") "Opus Pro Lead" else if (item.winner == "tie") "Equal" else "Competitor Edge",
+                        text = if (item.winner == "opus") "ISM Lead" else if (item.winner == "tie") "Equal" else "Competitor Edge",
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
                         color = winnerColor
@@ -489,7 +489,7 @@ private fun CriteriaRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(text = "Opus Pro:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = OpusElectricCyan)
+                    Text(text = "ISM:", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = OpusElectricCyan)
                     Text(text = item.opusValue, fontSize = 11.sp, color = OpusTextPrimary)
                 }
                 Column(modifier = Modifier.weight(1f)) {

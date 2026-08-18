@@ -100,7 +100,7 @@ class VideoProcessingWorker(
                 ProcessingNotification.show(
                     applicationContext,
                     jobId,
-                    "اكتملت معالجة Opus Pro",
+                    "اكتملت معالجة ISM",
                     "تم إنشاء المقاطع وحفظ المشروع رقم $projectId.",
                     success = true
                 )
@@ -120,7 +120,7 @@ class VideoProcessingWorker(
             ProcessingNotification.show(
                 applicationContext,
                 jobId,
-                "تم إلغاء معالجة Opus Pro",
+                "تم إلغاء معالجة ISM",
                 "ألغى المستخدم مهمة معالجة الفيديو.",
                 success = false
             )
@@ -147,7 +147,7 @@ class VideoProcessingWorker(
                 ProcessingNotification.show(
                     applicationContext,
                     jobId,
-                    "فشلت معالجة Opus Pro",
+                    "فشلت معالجة ISM",
                     message,
                     success = false
                 )

@@ -104,7 +104,7 @@ fun ClipStudioScreen(
 
     val displayedClips = remember(allClips, initialProjectId) {
         if (initialProjectId != null && initialProjectId > 0) {
-            allClips.filter { it.projectId == initialProjectId }.ifEmpty { allClips }
+            allClips.filter { it.projectId == initialProjectId }
         } else {
             allClips
         }
@@ -179,14 +179,14 @@ fun ClipStudioScreen(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = "No Clips Generated Yet",
+                    text = if (initialProjectId != null && initialProjectId > 0) "لا توجد مقاطع محفوظة لهذا المشروع" else "No Clips Generated Yet",
                     style = MaterialTheme.typography.titleMedium.copy(
                         color = OpusTextPrimary,
                         fontWeight = FontWeight.Bold
                     )
                 )
                 Text(
-                    text = "Head to Clipper to paste a link and extract viral shorts!",
+                    text = if (initialProjectId != null && initialProjectId > 0) "اكتملت العملية دون نتائج قابلة للعرض أو ما زالت المهمة قيد التنفيذ." else "Head to Clipper to paste a link and extract viral shorts!",
                     style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary),
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
                     textAlign = TextAlign.Center
@@ -628,7 +628,7 @@ fun ClipStudioScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Remove Opus Pro Watermark",
+                            text = "Remove ISM Watermark",
                             fontSize = 12.sp,
                             color = OpusTextPrimary,
                             fontWeight = FontWeight.Medium

@@ -33,6 +33,7 @@ import com.example.ui.screens.ClipCompetitorComparisonScreen
 import com.example.ui.screens.ClipStudioScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ProjectsScreen
+import com.example.ui.screens.SocialGatewayScreen
 import com.example.ui.screens.VideoUploadScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.OpusDarkCanvas
@@ -178,6 +179,12 @@ fun OpusProApp(repository: OpusRepository) {
                                     selectedProjectId = projectId
                                     currentTab = OpusNavTab.STUDIO
                                 }
+                            )
+                        }
+                        OpusNavTab.GATEWAY -> {
+                            SocialGatewayScreen(
+                                repository = repository,
+                                onBack = { currentTab = OpusNavTab.HOME }
                             )
                         }
                         OpusNavTab.SETTINGS -> {

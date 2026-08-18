@@ -161,7 +161,7 @@ class GeminiClipService(private val context: Context? = null) {
 
                     if (provider.providerType == AiProviderType.OPENROUTER.name) {
                         reqBuilder.addHeader("HTTP-Referer", "https://opuspro.internal")
-                        reqBuilder.addHeader("X-Title", "Opus Clip Flow")
+                        reqBuilder.addHeader("X-Title", "ISM Flow")
                     }
 
                     val response = okHttpClient.newCall(reqBuilder.build()).execute()
@@ -332,7 +332,7 @@ class GeminiClipService(private val context: Context? = null) {
 
                     if (provider.providerType == AiProviderType.OPENROUTER.name) {
                         reqBuilder.addHeader("HTTP-Referer", "https://opuspro.internal")
-                        reqBuilder.addHeader("X-Title", "Opus Clip Flow")
+                        reqBuilder.addHeader("X-Title", "ISM Flow")
                     }
 
                     val response = okHttpClient.newCall(reqBuilder.build()).execute()
@@ -438,7 +438,7 @@ class GeminiClipService(private val context: Context? = null) {
         videoUri: Uri? = null
     ): List<ClipGenerationData> = withContext(Dispatchers.IO) {
         val systemPrompt = """
-            You are Opus Pro (OpusClip) AI Video Repurposing Engine.
+            You are ISM (OpusClip) AI Video Repurposing Engine.
             Your task is to analyze the following video title and transcript/content, extract the most viral 30-60 second clips for TikTok, Instagram Reels, and YouTube Shorts.
             
             For each clip, calculate an authentic Virality Score (0-100) based on:
@@ -980,7 +980,7 @@ class GeminiClipService(private val context: Context? = null) {
                 mainCaption = mainCaption,
                 keyTakeaways = takeaways,
                 callToAction = obj.optString("callToAction", "Save this video for later & share your thoughts below! 👇"),
-                hashtags = if (tags.isNotEmpty()) tags else listOf("#Viral", "#Shorts", "#Trending", "#Growth", "#OpusClip"),
+                hashtags = if (tags.isNotEmpty()) tags else listOf("#Viral", "#Shorts", "#Trending", "#Growth", "#ISM"),
                 characterCount = mainCaption.length,
                 viralityGrade = obj.optString("viralityGrade", "A+ (97/100)"),
                 platformTips = obj.optString("platformTips", "Post between 6 PM - 9 PM for peak viral engagement.")
@@ -1068,7 +1068,7 @@ class GeminiClipService(private val context: Context? = null) {
         val tags = if (isArabic) {
             listOf("#ريلز", "#شورتس", "#تيك_توك", "#نجاح", "#تطوير_الذات", "#ذكاء_اصطناعي", "#فيديو_فيروسي", "#أرباح")
         } else {
-            listOf("#Viral", "#Shorts", "#Reels", "#TikTok", "#CreatorEconomy", "#GrowthHacking", "#OpusClip", "#Mindset")
+            listOf("#Viral", "#Shorts", "#Reels", "#TikTok", "#CreatorEconomy", "#GrowthHacking", "#ISM", "#Mindset")
         }
 
         return DedicatedCaptionResult(
@@ -1229,7 +1229,7 @@ class GeminiClipService(private val context: Context? = null) {
         providers: List<AiProviderConfig> = emptyList()
     ): AiTemplateRecommendation = withContext(Dispatchers.IO) {
         val systemPrompt = """
-            You are Opus Pro AI Video Director. Analyze the following video content and autonomously determine the most viral visual template, caption typography theme, reframing layout, and ideal platform target.
+            You are ISM AI Video Director. Analyze the following video content and autonomously determine the most viral visual template, caption typography theme, reframing layout, and ideal platform target.
             
             Available Caption Themes:
             - "Opus Neon" (High energy, neon cyan/violet highlights, cyber tech vibe)

@@ -2,7 +2,7 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Opus Pro Dark Theme Palette
+// ISM Dark Theme Palette
 val OpusDarkCanvas = Color(0xFF090A0F)
 val OpusDarkSurface = Color(0xFF11131E)
 val OpusDarkSurfaceVariant = Color(0xFF1A1C2C)

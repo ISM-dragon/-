@@ -107,7 +107,7 @@ fun ComparisonHubScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "Opus Pro vs Top 7 Video Clipping Alternatives",
+                    text = "ISM vs Top 7 Video Clipping Alternatives",
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Black,
                         color = OpusTextPrimary
@@ -282,7 +282,7 @@ fun ComparisonHubScreen(
                                     .padding(8.dp)
                             ) {
                                 TableCell("Core Capability", width = 160, isHeader = true)
-                                TableCell("Opus Pro", width = 100, isHeader = true, color = OpusElectricCyan)
+                                TableCell("ISM", width = 100, isHeader = true, color = OpusElectricCyan)
                                 TableCell("Descript", width = 90, isHeader = true)
                                 TableCell("Klap", width = 90, isHeader = true)
                                 TableCell("Munch", width = 90, isHeader = true)
@@ -332,9 +332,9 @@ fun ComparisonHubScreen(
         item {
             SeoMetadataCard(
                 url = "https://opus.pro/compare",
-                title = "Opus Pro vs Competitors & Alternatives (2026 Guide)",
-                metaDescription = "Compare Opus Pro vs Descript, Klap, Munch, Vizard, Vidyo.ai, CapCut & Submagic. Complete feature, virality score & pricing breakdown.",
-                structuredDataJsonLd = """{"@context":"https://schema.org","@type":"CollectionPage","name":"Opus Pro Video Clipper Competitor Comparison Hub","hasPart":[{"@type":"Product","name":"Descript"},{"@type":"Product","name":"Klap"},{"@type":"Product","name":"Munch"}]}"""
+                title = "ISM vs Competitors & Alternatives (2026 Guide)",
+                metaDescription = "Compare ISM vs Descript, Klap, Munch, Vizard, Vidyo.ai, CapCut & Submagic. Complete feature, virality score & pricing breakdown.",
+                structuredDataJsonLd = """{"@context":"https://schema.org","@type":"CollectionPage","name":"ISM Video Clipper Competitor Comparison Hub","hasPart":[{"@type":"Product","name":"Descript"},{"@type":"Product","name":"Klap"},{"@type":"Product","name":"Munch"}]}"""
             )
         }
 
@@ -435,7 +435,7 @@ private fun CompetitorCard(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "Opus Pro vs ${competitor.name}",
+                            text = "ISM vs ${competitor.name}",
                             style = MaterialTheme.typography.titleSmall.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = OpusTextPrimary
