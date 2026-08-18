@@ -44,9 +44,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
         with:
-          tag_name: v1.0.0-apk
-          name: "Opus Pro AI - APK Release"
-          body: "Official Android APK Build generated automatically."
+          tag_name: v1.0.1-apk
+          name: "Opus Pro AI - APK v1.0.1"
+          body: "Opus Pro AI APK version 1.0.1 — generated automatically from commit ${{ github.sha }}."
           draft: false
           prerelease: false
           files: |
