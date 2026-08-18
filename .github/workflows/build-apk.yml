@@ -48,8 +48,24 @@ jobs:
 
       - name: Run Android Lint
         run: |
+          set +e
           chmod +x gradlew
           ./gradlew :app:lint --no-daemon --stacktrace
+          lint_status=$?
+          if [ -f app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt ]; then
+            cat app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+          fi
+          exit $lint_status
+
+      - name: Upload Lint Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpusPro-Lint-Reports
+          path: |
+            app/build/reports/lint-results-debug.html
+            app/build/intermediates/lint_intermediate_text_report/debug/lintReportDebug/lint-results-debug.txt
+          if-no-files-found: warn
 
       - name: Build Debug APK
         run: |

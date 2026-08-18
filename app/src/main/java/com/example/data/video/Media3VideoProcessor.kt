@@ -36,6 +36,7 @@ data class SourceVideoMetadata(
     val mimeType: String
 )
 
+@OptIn(UnstableApi::class)
 class Media3VideoProcessor(private val context: Context) {
 
     fun inspectSource(inputUri: Uri): SourceVideoMetadata? {
