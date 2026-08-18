@@ -163,6 +163,7 @@ fun HomeScreen(
     val aiProviders by repository.aiProviders.collectAsState()
     val allProjects by repository.allProjects.collectAsState(initial = emptyList())
 
+    var inputSourceMode by remember { mutableIntStateOf(0) } // 0: URL / Prompt, 1: Device Media Picker
     var videoUrl by remember { mutableStateOf("") }
     var videoTitle by remember { mutableStateOf("") }
     var transcriptPrompt by remember { mutableStateOf("") }
@@ -554,425 +555,557 @@ fun HomeScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, OpusBorder)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
+                    // Source Input Mode Selector Segment
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(OpusDarkSurfaceVariant)
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text(
-                            text = "رابط الفيديو أو نص المحتوى",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = OpusTextPrimary
-                            )
-                        )
-                        Text(
-                            text = "YouTube, MP4, Podcast",
-                            fontSize = 11.sp,
-                            color = OpusTextSecondary
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // URL Input Field
-                    OutlinedTextField(
-                        value = videoUrl,
-                        onValueChange = { videoUrl = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("video_url_input"),
-                        placeholder = {
-                            Text("الصق رابط الفيديو (مثلاً: https://youtu.be/...)", color = OpusTextSecondary, fontSize = 12.sp)
-                        },
-                        leadingIcon = {
-                            Icon(imageVector = Icons.Default.Link, contentDescription = "Link", tint = OpusElectricCyan)
-                        },
-                        trailingIcon = {
-                            Box(
-                                modifier = Modifier
-                                    .padding(end = 6.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(OpusDarkSurfaceVariant)
-                                    .clickable {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        val item = clipboard.primaryClip?.getItemAt(0)
-                                        if (item != null) {
-                                            videoUrl = item.text?.toString() ?: ""
-                                            Toast.makeText(context, "تم اللصق من الحافظة", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.ContentPaste, contentDescription = "Paste", tint = OpusElectricCyan, modifier = Modifier.size(12.dp))
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text("لصق", fontSize = 10.sp, color = OpusTextPrimary)
-                                }
-                            }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = OpusElectricCyan,
-                            unfocusedBorderColor = OpusBorder,
-                            focusedTextColor = OpusTextPrimary,
-                            unfocusedTextColor = OpusTextPrimary,
-                            focusedContainerColor = OpusDarkSurfaceHighlight,
-                            unfocusedContainerColor = OpusDarkSurfaceVariant
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Video Title (Optional)
-                    OutlinedTextField(
-                        value = videoTitle,
-                        onValueChange = { videoTitle = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("video_title_input"),
-                        placeholder = {
-                            Text("عنوان الفيديو أو موضوع النقاش (اختياري)", color = OpusTextSecondary, fontSize = 12.sp)
-                        },
-                        leadingIcon = {
-                            Icon(imageVector = Icons.Default.Videocam, contentDescription = "Title", tint = OpusVioletGlow)
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = OpusVioletGlow,
-                            unfocusedBorderColor = OpusBorder,
-                            focusedTextColor = OpusTextPrimary,
-                            unfocusedTextColor = OpusTextPrimary,
-                            focusedContainerColor = OpusDarkSurfaceHighlight,
-                            unfocusedContainerColor = OpusDarkSurfaceVariant
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Transcript / Prompt Context Field
-                    OutlinedTextField(
-                        value = transcriptPrompt,
-                        onValueChange = { transcriptPrompt = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("transcript_prompt_input"),
-                        placeholder = {
-                            Text("ملخص أو نص تفريغ أو موضوعات تركيز الذكاء الاصطناعي...", color = OpusTextSecondary, fontSize = 12.sp)
-                        },
-                        leadingIcon = {
-                            Icon(imageVector = Icons.Default.TextFields, contentDescription = "Transcript", tint = OpusGold)
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = OpusGold,
-                            unfocusedBorderColor = OpusBorder,
-                            focusedTextColor = OpusTextPrimary,
-                            unfocusedTextColor = OpusTextPrimary,
-                            focusedContainerColor = OpusDarkSurfaceHighlight,
-                            unfocusedContainerColor = OpusDarkSurfaceVariant
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        maxLines = 3
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Source Video Duration Slider
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "مدة الفيديو التقريبية: $durationMinutes دقيقة",
-                            style = MaterialTheme.typography.labelMedium.copy(color = OpusTextPrimary, fontWeight = FontWeight.Bold)
-                        )
-                        Text(
-                            text = "توليد حتى ${durationMinutes.coerceAtMost(60) / 2 + 3} مقاطع",
-                            fontSize = 11.sp,
-                            color = OpusElectricCyan,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-
-                    Slider(
-                        value = durationMinutes.toFloat(),
-                        onValueChange = { durationMinutes = it.toInt() },
-                        valueRange = 5f..90f,
-                        steps = 16,
-                        colors = SliderDefaults.colors(
-                            thumbColor = OpusElectricCyan,
-                            activeTrackColor = OpusElectricCyan,
-                            inactiveTrackColor = OpusDarkSurfaceHighlight
-                        ),
-                        modifier = Modifier.fillMaxWidth().testTag("duration_slider")
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // AI Template & Styling Auto-Detection Switch Banner
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (autoDetectAiTemplate) OpusPrimaryViolet.copy(alpha = 0.25f) else OpusDarkSurfaceVariant)
-                            .border(1.dp, if (autoDetectAiTemplate) OpusElectricCyan else OpusBorder, RoundedCornerShape(10.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (inputSourceMode == 0) OpusPrimaryViolet else Color.Transparent)
+                                .clickable { inputSourceMode = 0 }
+                                .padding(vertical = 8.dp)
+                                .testTag("source_mode_url_tab"),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = "AI Auto Template",
-                                    tint = if (autoDetectAiTemplate) OpusElectricCyan else OpusTextSecondary,
-                                    modifier = Modifier.size(18.dp)
+                                    imageVector = Icons.Default.Link,
+                                    contentDescription = "URL",
+                                    tint = if (inputSourceMode == 0) OpusElectricCyan else OpusTextSecondary,
+                                    modifier = Modifier.size(15.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = "🤖 تحديد القالب والنمط تلقائياً عبر AI",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = OpusTextPrimary
-                                    )
-                                    Text(
-                                        text = if (autoDetectAiTemplate)
-                                            "محرك Gemini API يحلل الفيديو ويحدد القالب ونمط الترجمة الأكثر انتشاراً"
-                                        else
-                                            "التحكم اليدوي في قالب الترجمة والأبعاد",
-                                        fontSize = 10.sp,
-                                        color = if (autoDetectAiTemplate) OpusElectricCyan else OpusTextSecondary
-                                    )
-                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "رابط يوتيوب / ويب",
+                                    fontSize = 11.sp,
+                                    fontWeight = if (inputSourceMode == 0) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (inputSourceMode == 0) Color.White else OpusTextSecondary
+                                )
                             }
+                        }
 
-                            Switch(
-                                checked = autoDetectAiTemplate,
-                                onCheckedChange = { autoDetectAiTemplate = it },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = OpusElectricCyan
-                                ),
-                                modifier = Modifier.testTag("home_auto_ai_template_switch")
-                            )
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (inputSourceMode == 1) OpusPrimaryViolet else Color.Transparent)
+                                .clickable { inputSourceMode = 1 }
+                                .padding(vertical = 8.dp)
+                                .testTag("source_mode_gallery_tab"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Folder,
+                                    contentDescription = "Device Video",
+                                    tint = if (inputSourceMode == 1) OpusElectricCyan else OpusTextSecondary,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "من الهاتف (Media Picker)",
+                                    fontSize = 11.sp,
+                                    fontWeight = if (inputSourceMode == 1) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (inputSourceMode == 1) Color.White else OpusTextSecondary
+                                )
+                            }
                         }
                     }
 
-                    if (!autoDetectAiTemplate) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        // Manual Caption Style Selector (Shown only if manual override selected)
-                        Text(
-                            text = "نمط الترجمة الحركية اليدوي (Manual Caption Theme):",
-                            style = MaterialTheme.typography.labelMedium.copy(color = OpusTextPrimary, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    if (inputSourceMode == 1) {
+                        // Embedded Device Gallery Video Picker Component
+                        DeviceGalleryVideoPicker(
+                            onVideoSelected = { videoData ->
+                                videoTitle = videoData.fileName
+                                val durMin = (videoData.durationMs / 60000).toInt().coerceAtLeast(1)
+                                durationMinutes = durMin
+                                transcriptPrompt = "تحليل فيديو محلي: ${videoData.fileName} بدقة ${videoData.width}x${videoData.height}"
+                                Toast.makeText(context, "تم اختيار الفيديو: ${videoData.fileName}", Toast.LENGTH_SHORT).show()
+                            },
+                            onStartProcessing = { videoData ->
+                                isProcessing = true
+                                coroutineScope.launch {
+                                    try {
+                                        val tTitle = videoData.fileName
+                                        val tPrompt = "فيديو محلي من المعرض: ${videoData.fileName} بدقة ${videoData.width}x${videoData.height}"
+                                        val tDurMin = (videoData.durationMs / 60000).toInt().coerceAtLeast(1)
+
+                                        var cTheme = selectedCaptionTheme
+                                        var pPlatform = selectedPlatform
+
+                                        if (autoDetectAiTemplate) {
+                                            try {
+                                                val aiRec = repository.determineOptimalTemplate(
+                                                    title = tTitle,
+                                                    transcript = tPrompt,
+                                                    durationSec = (videoData.durationMs / 1000).toInt().coerceAtLeast(30)
+                                                )
+                                                cTheme = aiRec.recommendedCaptionTheme
+                                                pPlatform = aiRec.recommendedPlatform
+                                            } catch (_: Exception) {}
+                                        }
+
+                                        val newProjectId = repository.processNewVideo(
+                                            title = tTitle,
+                                            sourceUrl = videoData.uri.toString(),
+                                            transcriptOrPrompt = tPrompt,
+                                            durationMinutes = tDurMin,
+                                            targetPlatform = pPlatform,
+                                            captionTheme = cTheme
+                                        )
+                                        isProcessing = false
+                                        Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Gemini AI!", Toast.LENGTH_SHORT).show()
+
+                                        if (autoPublishConfig.isEnabled) {
+                                            val publishRes = repository.dispatchAutoPublishForNewProject(newProjectId, context)
+                                            val bestClip = repository.getBestClipForProject(newProjectId)
+                                            if (publishRes != null && bestClip != null) {
+                                                autoPublishDialogData = Pair(bestClip, publishRes)
+                                            } else {
+                                                onProjectCreated(newProjectId)
+                                            }
+                                        } else {
+                                            onProjectCreated(newProjectId)
+                                        }
+                                    } catch (e: Exception) {
+                                        isProcessing = false
+                                        Toast.makeText(context, "خطأ: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            isProcessing = isProcessing
                         )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
+                    } else {
+                        // URL & Prompt Mode Content
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            val captionPresets = listOf("Opus Neon", "MrBeast Bold", "Ali Abdaal Clean", "Hormozi Kinetic")
-                            items(captionPresets) { theme ->
-                                val isSelected = selectedCaptionTheme == theme
+                            Text(
+                                text = "رابط الفيديو أو نص المحتوى",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = OpusTextPrimary
+                                )
+                            )
+                            Text(
+                                text = "YouTube, MP4, Podcast",
+                                fontSize = 11.sp,
+                                color = OpusTextSecondary
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // URL Input Field
+                        OutlinedTextField(
+                            value = videoUrl,
+                            onValueChange = { videoUrl = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("video_url_input"),
+                            placeholder = {
+                                Text("الصق رابط الفيديو (مثلاً: https://youtu.be/...)", color = OpusTextSecondary, fontSize = 12.sp)
+                            },
+                            leadingIcon = {
+                                Icon(imageVector = Icons.Default.Link, contentDescription = "Link", tint = OpusElectricCyan)
+                            },
+                            trailingIcon = {
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(if (isSelected) OpusPrimaryViolet else OpusDarkSurfaceVariant)
-                                        .border(1.dp, if (isSelected) OpusElectricCyan else OpusBorder, RoundedCornerShape(8.dp))
-                                        .clickable { selectedCaptionTheme = theme }
-                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                        .padding(end = 6.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(OpusDarkSurfaceVariant)
+                                        .clickable {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            val item = clipboard.primaryClip?.getItemAt(0)
+                                            if (item != null) {
+                                                videoUrl = item.text?.toString() ?: ""
+                                                Toast.makeText(context, "تم اللصق من الحافظة", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (isSelected) {
-                                            Icon(imageVector = Icons.Default.Check, contentDescription = "Selected", tint = OpusElectricCyan, modifier = Modifier.size(12.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                        }
-                                        Text(
-                                            text = theme,
-                                            fontSize = 11.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (isSelected) OpusTextPrimary else OpusTextSecondary
-                                        )
+                                        Icon(imageVector = Icons.Default.ContentPaste, contentDescription = "Paste", tint = OpusElectricCyan, modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("لصق", fontSize = 10.sp, color = OpusTextPrimary)
                                     }
                                 }
-                            }
-                        }
-                    }
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = OpusElectricCyan,
+                                unfocusedBorderColor = OpusBorder,
+                                focusedTextColor = OpusTextPrimary,
+                                unfocusedTextColor = OpusTextPrimary,
+                                focusedContainerColor = OpusDarkSurfaceHighlight,
+                                unfocusedContainerColor = OpusDarkSurfaceVariant
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true
+                        )
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                    // Auto-Publish Option Switch Banner
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (autoPublishConfig.isEnabled) OpusPrimaryViolet.copy(alpha = 0.25f) else OpusDarkSurfaceVariant)
-                            .border(1.dp, if (autoPublishConfig.isEnabled) OpusElectricCyan else OpusBorder, RoundedCornerShape(10.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
+                        // Video Title (Optional)
+                        OutlinedTextField(
+                            value = videoTitle,
+                            onValueChange = { videoTitle = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("video_title_input"),
+                            placeholder = {
+                                Text("عنوان الفيديو أو موضوع النقاش (اختياري)", color = OpusTextSecondary, fontSize = 12.sp)
+                            },
+                            leadingIcon = {
+                                Icon(imageVector = Icons.Default.Videocam, contentDescription = "Title", tint = OpusVioletGlow)
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = OpusVioletGlow,
+                                unfocusedBorderColor = OpusBorder,
+                                focusedTextColor = OpusTextPrimary,
+                                unfocusedTextColor = OpusTextPrimary,
+                                focusedContainerColor = OpusDarkSurfaceHighlight,
+                                unfocusedContainerColor = OpusDarkSurfaceVariant
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Transcript / Prompt Context Field
+                        OutlinedTextField(
+                            value = transcriptPrompt,
+                            onValueChange = { transcriptPrompt = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("transcript_prompt_input"),
+                            placeholder = {
+                                Text("ملخص أو نص تفريغ أو موضوعات تركيز الذكاء الاصطناعي...", color = OpusTextSecondary, fontSize = 12.sp)
+                            },
+                            leadingIcon = {
+                                Icon(imageVector = Icons.Default.TextFields, contentDescription = "Transcript", tint = OpusGold)
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = OpusGold,
+                                unfocusedBorderColor = OpusBorder,
+                                focusedTextColor = OpusTextPrimary,
+                                unfocusedTextColor = OpusTextPrimary,
+                                focusedContainerColor = OpusDarkSurfaceHighlight,
+                                unfocusedContainerColor = OpusDarkSurfaceVariant
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            maxLines = 3
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Source Video Duration Slider
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                Icon(
-                                    imageVector = Icons.Default.Send,
-                                    contentDescription = "Auto Publish",
-                                    tint = if (autoPublishConfig.isEnabled) OpusElectricCyan else OpusTextSecondary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "مدة الفيديو التقريبية: $durationMinutes دقيقة",
+                                style = MaterialTheme.typography.labelMedium.copy(color = OpusTextPrimary, fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "توليد حتى ${durationMinutes.coerceAtMost(60) / 2 + 3} مقاطع",
+                                fontSize = 11.sp,
+                                color = OpusElectricCyan,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Slider(
+                            value = durationMinutes.toFloat(),
+                            onValueChange = { durationMinutes = it.toInt() },
+                            valueRange = 5f..90f,
+                            steps = 16,
+                            colors = SliderDefaults.colors(
+                                thumbColor = OpusElectricCyan,
+                                activeTrackColor = OpusElectricCyan,
+                                inactiveTrackColor = OpusDarkSurfaceHighlight
+                            ),
+                            modifier = Modifier.fillMaxWidth().testTag("duration_slider")
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // AI Template & Styling Auto-Detection Switch Banner
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (autoDetectAiTemplate) OpusPrimaryViolet.copy(alpha = 0.25f) else OpusDarkSurfaceVariant)
+                                .border(1.dp, if (autoDetectAiTemplate) OpusElectricCyan else OpusBorder, RoundedCornerShape(10.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "AI Auto Template",
+                                        tint = if (autoDetectAiTemplate) OpusElectricCyan else OpusTextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
                                         Text(
-                                            text = "نشر تلقائي بعد انتهاء التوليد",
+                                            text = "🤖 تحديد القالب والنمط تلقائياً عبر AI",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = OpusTextPrimary
                                         )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Icon(
-                                            imageVector = Icons.Default.Settings,
-                                            contentDescription = "Config",
-                                            tint = OpusElectricCyan,
-                                            modifier = Modifier
-                                                .size(16.dp)
-                                                .clickable { showAutoPublishSettingsDialog = true }
+                                        Text(
+                                            text = if (autoDetectAiTemplate)
+                                                "محرك Gemini API يحلل الفيديو ويحدد القالب ونمط الترجمة الأكثر انتشاراً"
+                                            else
+                                                "التحكم اليدوي في قالب الترجمة والأبعاد",
+                                            fontSize = 10.sp,
+                                            color = if (autoDetectAiTemplate) OpusElectricCyan else OpusTextSecondary
                                         )
                                     }
-                                    Text(
-                                        text = if (autoPublishConfig.isEnabled) "مفعل (${autoPublishConfig.targetPlatforms.joinToString(", ")})" else "معطل (انقر للضبط)",
-                                        fontSize = 10.sp,
-                                        color = if (autoPublishConfig.isEnabled) OpusViralEmerald else OpusTextSecondary
-                                    )
                                 }
-                            }
 
-                            Switch(
-                                checked = autoPublishConfig.isEnabled,
-                                onCheckedChange = { isChecked ->
-                                    coroutineScope.launch {
-                                        repository.saveAutoPublishConfig(autoPublishConfig.copy(isEnabled = isChecked))
-                                    }
-                                },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = OpusElectricCyan
-                                ),
-                                modifier = Modifier.testTag("home_auto_publish_switch")
-                            )
+                                Switch(
+                                    checked = autoDetectAiTemplate,
+                                    onCheckedChange = { autoDetectAiTemplate = it },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.White,
+                                        checkedTrackColor = OpusElectricCyan
+                                    ),
+                                    modifier = Modifier.testTag("home_auto_ai_template_switch")
+                                )
+                            }
                         }
-                    }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                        if (!autoDetectAiTemplate) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            // Manual Caption Style Selector (Shown only if manual override selected)
+                            Text(
+                                text = "نمط الترجمة الحركية اليدوي (Manual Caption Theme):",
+                                style = MaterialTheme.typography.labelMedium.copy(color = OpusTextPrimary, fontWeight = FontWeight.Bold)
+                            )
 
-                    // Action Button: 1-Click Generate with Google Flow
-                    Button(
-                        onClick = {
-                            if (videoUrl.isBlank() && transcriptPrompt.isBlank() && videoTitle.isBlank()) {
-                                Toast.makeText(context, "الرجاء إدخال رابط أو نص لبدء التوليد", Toast.LENGTH_SHORT).show()
-                                return@Button
-                            }
+                            Spacer(modifier = Modifier.height(6.dp))
 
-                            isProcessing = true
-                            coroutineScope.launch {
-                                val targetTitle = videoTitle.ifBlank {
-                                    if (videoUrl.isNotBlank()) "Video: ${videoUrl.takeLast(12)}" else "AI Viral Project"
-                                }
-                                val targetUrl = videoUrl.ifBlank { "https://youtube.com/watch?v=sample_ai_clip" }
-                                val targetPrompt = transcriptPrompt.ifBlank { "High impact discussion exploring key viral principles, frameworks, and stories." }
-
-                                try {
-                                    var effectiveCaptionTheme = selectedCaptionTheme
-                                    var effectivePlatform = selectedPlatform
-
-                                    if (autoDetectAiTemplate) {
-                                        try {
-                                            val aiRec = repository.determineOptimalTemplate(
-                                                title = targetTitle,
-                                                transcript = targetPrompt,
-                                                durationSec = durationMinutes * 60
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val captionPresets = listOf("Opus Neon", "MrBeast Bold", "Ali Abdaal Clean", "Hormozi Kinetic")
+                                items(captionPresets) { theme ->
+                                    val isSelected = selectedCaptionTheme == theme
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isSelected) OpusPrimaryViolet else OpusDarkSurfaceVariant)
+                                            .border(1.dp, if (isSelected) OpusElectricCyan else OpusBorder, RoundedCornerShape(8.dp))
+                                            .clickable { selectedCaptionTheme = theme }
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (isSelected) {
+                                                Icon(imageVector = Icons.Default.Check, contentDescription = "Selected", tint = OpusElectricCyan, modifier = Modifier.size(12.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                            }
+                                            Text(
+                                                text = theme,
+                                                fontSize = 11.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isSelected) OpusTextPrimary else OpusTextSecondary
                                             )
-                                            detectedRecommendation = aiRec
-                                            effectiveCaptionTheme = aiRec.recommendedCaptionTheme
-                                            effectivePlatform = aiRec.recommendedPlatform
-                                        } catch (_: Exception) {}
+                                        }
                                     }
+                                }
+                            }
+                        }
 
-                                    val newProjectId = repository.processNewVideo(
-                                        title = targetTitle,
-                                        sourceUrl = targetUrl,
-                                        transcriptOrPrompt = targetPrompt,
-                                        durationMinutes = durationMinutes,
-                                        targetPlatform = effectivePlatform,
-                                        captionTheme = effectiveCaptionTheme
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Auto-Publish Option Switch Banner
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (autoPublishConfig.isEnabled) OpusPrimaryViolet.copy(alpha = 0.25f) else OpusDarkSurfaceVariant)
+                                .border(1.dp, if (autoPublishConfig.isEnabled) OpusElectricCyan else OpusBorder, RoundedCornerShape(10.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Icon(
+                                        imageVector = Icons.Default.Send,
+                                        contentDescription = "Auto Publish",
+                                        tint = if (autoPublishConfig.isEnabled) OpusElectricCyan else OpusTextSecondary,
+                                        modifier = Modifier.size(16.dp)
                                     )
-                                    isProcessing = false
-                                    Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Google Flow!", Toast.LENGTH_SHORT).show()
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "نشر تلقائي بعد انتهاء التوليد",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = OpusTextPrimary
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Icon(
+                                                imageVector = Icons.Default.Settings,
+                                                contentDescription = "Config",
+                                                tint = OpusElectricCyan,
+                                                modifier = Modifier
+                                                    .size(16.dp)
+                                                    .clickable { showAutoPublishSettingsDialog = true }
+                                            )
+                                        }
+                                        Text(
+                                            text = if (autoPublishConfig.isEnabled) "مفعل (${autoPublishConfig.targetPlatforms.joinToString(", ")})" else "معطل (انقر للضبط)",
+                                            fontSize = 10.sp,
+                                            color = if (autoPublishConfig.isEnabled) OpusViralEmerald else OpusTextSecondary
+                                        )
+                                    }
+                                }
 
-                                    // Check if Auto-Publish is active
-                                    if (autoPublishConfig.isEnabled) {
-                                        val publishRes = repository.dispatchAutoPublishForNewProject(newProjectId, context)
-                                        val bestClip = repository.getBestClipForProject(newProjectId)
-                                        if (publishRes != null && bestClip != null) {
-                                            autoPublishDialogData = Pair(bestClip, publishRes)
+                                Switch(
+                                    checked = autoPublishConfig.isEnabled,
+                                    onCheckedChange = { isChecked ->
+                                        coroutineScope.launch {
+                                            repository.saveAutoPublishConfig(autoPublishConfig.copy(isEnabled = isChecked))
+                                        }
+                                    },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color.White,
+                                        checkedTrackColor = OpusElectricCyan
+                                    ),
+                                    modifier = Modifier.testTag("home_auto_publish_switch")
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Action Button: 1-Click Generate with Google Flow
+                        Button(
+                            onClick = {
+                                if (videoUrl.isBlank() && transcriptPrompt.isBlank() && videoTitle.isBlank()) {
+                                    Toast.makeText(context, "الرجاء إدخال رابط أو نص لبدء التوليد", Toast.LENGTH_SHORT).show()
+                                    return@Button
+                                }
+
+                                isProcessing = true
+                                coroutineScope.launch {
+                                    val targetTitle = videoTitle.ifBlank {
+                                        if (videoUrl.isNotBlank()) "Video: ${videoUrl.takeLast(12)}" else "AI Viral Project"
+                                    }
+                                    val targetUrl = videoUrl.ifBlank { "https://youtube.com/watch?v=sample_ai_clip" }
+                                    val targetPrompt = transcriptPrompt.ifBlank { "High impact discussion exploring key viral principles, frameworks, and stories." }
+
+                                    try {
+                                        var effectiveCaptionTheme = selectedCaptionTheme
+                                        var effectivePlatform = selectedPlatform
+
+                                        if (autoDetectAiTemplate) {
+                                            try {
+                                                val aiRec = repository.determineOptimalTemplate(
+                                                    title = targetTitle,
+                                                    transcript = targetPrompt,
+                                                    durationSec = durationMinutes * 60
+                                                )
+                                                detectedRecommendation = aiRec
+                                                effectiveCaptionTheme = aiRec.recommendedCaptionTheme
+                                                effectivePlatform = aiRec.recommendedPlatform
+                                            } catch (_: Exception) {}
+                                        }
+
+                                        val newProjectId = repository.processNewVideo(
+                                            title = targetTitle,
+                                            sourceUrl = targetUrl,
+                                            transcriptOrPrompt = targetPrompt,
+                                            durationMinutes = durationMinutes,
+                                            targetPlatform = effectivePlatform,
+                                            captionTheme = effectiveCaptionTheme
+                                        )
+                                        isProcessing = false
+                                        Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Google Flow!", Toast.LENGTH_SHORT).show()
+
+                                        // Check if Auto-Publish is active
+                                        if (autoPublishConfig.isEnabled) {
+                                            val publishRes = repository.dispatchAutoPublishForNewProject(newProjectId, context)
+                                            val bestClip = repository.getBestClipForProject(newProjectId)
+                                            if (publishRes != null && bestClip != null) {
+                                                autoPublishDialogData = Pair(bestClip, publishRes)
+                                            } else {
+                                                onProjectCreated(newProjectId)
+                                            }
                                         } else {
                                             onProjectCreated(newProjectId)
                                         }
-                                    } else {
-                                        onProjectCreated(newProjectId)
+                                    } catch (e: Exception) {
+                                        isProcessing = false
+                                        Toast.makeText(context, "خطأ: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
                                     }
-                                } catch (e: Exception) {
-                                    isProcessing = false
-                                    Toast.makeText(context, "خطأ: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
                                 }
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .testTag("generate_clips_button"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = OpusPrimaryViolet
-                        ),
-                        enabled = !isProcessing
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .testTag("generate_clips_button"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = OpusPrimaryViolet
+                            ),
+                            enabled = !isProcessing
                         ) {
-                            if (isProcessing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    color = Color.White,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "جاري المعالجة وتحديد القالب بالذكاء الاصطناعي...",
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = Color.White)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = "Generate",
-                                    tint = OpusElectricCyan,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "استخراج وتوليد المقاطع (Google Flow AI)",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = Color.White)
-                                )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                if (isProcessing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        color = Color.White,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = "جاري المعالجة وتحديد القالب بالذكاء الاصطناعي...",
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = Color.White)
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = "Generate",
+                                        tint = OpusElectricCyan,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "استخراج وتوليد المقاطع (Google Flow AI)",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = Color.White)
+                                    )
+                                }
                             }
                         }
                     }
