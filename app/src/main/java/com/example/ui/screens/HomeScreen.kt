@@ -706,6 +706,7 @@ fun HomeScreen(
 
                                         var cTheme = selectedCaptionTheme
                                         var pPlatform = selectedPlatform
+                                        var pLayout = "9:16 Full Screen"
 
                                         if (autoDetectAiTemplate) {
                                             try {
@@ -716,6 +717,7 @@ fun HomeScreen(
                                                 )
                                                 cTheme = aiRec.recommendedCaptionTheme
                                                 pPlatform = aiRec.recommendedPlatform
+                                                pLayout = aiRec.recommendedLayout
                                             } catch (_: Exception) {}
                                         }
 
@@ -725,7 +727,8 @@ fun HomeScreen(
                                             transcriptOrPrompt = tPrompt,
                                             durationMinutes = tDurMin,
                                             targetPlatform = pPlatform,
-                                            captionTheme = cTheme
+                                            captionTheme = cTheme,
+                                            layoutType = pLayout
                                         )
                                         isProcessing = false
                                         Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Gemini AI!", Toast.LENGTH_SHORT).show()
@@ -1092,6 +1095,7 @@ fun HomeScreen(
                                     try {
                                         var effectiveCaptionTheme = selectedCaptionTheme
                                         var effectivePlatform = selectedPlatform
+                                        var effectiveLayout = "9:16 Full Screen"
 
                                         if (autoDetectAiTemplate) {
                                             try {
@@ -1103,6 +1107,7 @@ fun HomeScreen(
                                                 detectedRecommendation = aiRec
                                                 effectiveCaptionTheme = aiRec.recommendedCaptionTheme
                                                 effectivePlatform = aiRec.recommendedPlatform
+                                                effectiveLayout = aiRec.recommendedLayout
                                             } catch (_: Exception) {}
                                         }
 
@@ -1112,7 +1117,8 @@ fun HomeScreen(
                                             transcriptOrPrompt = targetPrompt,
                                             durationMinutes = durationMinutes,
                                             targetPlatform = effectivePlatform,
-                                            captionTheme = effectiveCaptionTheme
+                                            captionTheme = effectiveCaptionTheme,
+                                            layoutType = effectiveLayout
                                         )
                                         isProcessing = false
                                         Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Google Flow!", Toast.LENGTH_SHORT).show()
@@ -1180,71 +1186,6 @@ fun HomeScreen(
             }
         }
 
-        // Device Gallery Video Picker Section (Replacing Static Presets UI)
-        item {
-            DeviceGalleryVideoPicker(
-                onVideoSelected = { videoData ->
-                    videoTitle = videoData.fileName
-                    val durMin = (videoData.durationMs / 60000).toInt().coerceAtLeast(1)
-                    durationMinutes = durMin
-                    transcriptPrompt = "تحليل فيديو محلي: ${videoData.fileName} بدقة ${videoData.width}x${videoData.height} وحجم ${videoData.fileSizeBytes / (1024 * 1024)}MB"
-                    Toast.makeText(context, "تم اختيار الفيديو: ${videoData.fileName}", Toast.LENGTH_SHORT).show()
-                },
-                onStartProcessing = { videoData ->
-                    isProcessing = true
-                    coroutineScope.launch {
-                        try {
-                            val tTitle = videoData.fileName
-                            val tPrompt = "فيديو محلي من المعرض: ${videoData.fileName} بدقة ${videoData.width}x${videoData.height}"
-                            val tDurMin = (videoData.durationMs / 60000).toInt().coerceAtLeast(1)
-
-                            var cTheme = selectedCaptionTheme
-                            var pPlatform = selectedPlatform
-
-                            if (autoDetectAiTemplate) {
-                                try {
-                                    val aiRec = repository.determineOptimalTemplate(
-                                        title = tTitle,
-                                        transcript = tPrompt,
-                                        durationSec = (videoData.durationMs / 1000).toInt().coerceAtLeast(30)
-                                    )
-                                    cTheme = aiRec.recommendedCaptionTheme
-                                    pPlatform = aiRec.recommendedPlatform
-                                } catch (_: Exception) {}
-                            }
-
-                            val newProjectId = repository.processNewVideo(
-                                title = tTitle,
-                                sourceUrl = videoData.uri.toString(),
-                                transcriptOrPrompt = tPrompt,
-                                durationMinutes = tDurMin,
-                                targetPlatform = pPlatform,
-                                captionTheme = cTheme
-                            )
-                            isProcessing = false
-                            Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Gemini AI!", Toast.LENGTH_SHORT).show()
-
-                            if (autoPublishConfig.isEnabled) {
-                                val publishRes = repository.dispatchAutoPublishForNewProject(newProjectId, context)
-                                val bestClip = repository.getBestClipForProject(newProjectId)
-                                if (publishRes != null && bestClip != null) {
-                                    autoPublishDialogData = Pair(bestClip, publishRes)
-                                } else {
-                                    onProjectCreated(newProjectId)
-                                }
-                            } else {
-                                onProjectCreated(newProjectId)
-                            }
-                        } catch (e: Exception) {
-                            isProcessing = false
-                            Toast.makeText(context, "خطأ: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                        }
-                    }
-                },
-                isProcessing = isProcessing
-            )
-        }
-
         // Recent Projects Section: render only when real Room data exists.
         if (allProjects.isNotEmpty()) {
             item {
@@ -1284,6 +1225,9 @@ fun HomeScreen(
 
 @Composable
 private fun ProcessingPipelineCard(step: ProcessingStep) {
+    val totalSteps = ProcessingStep.Completed.stepNumber.coerceAtLeast(1)
+    val progress = (step.stepNumber.toFloat() / totalSteps).coerceIn(0f, 1f)
+
     Card(
         modifier = Modifier.fillMaxWidth().testTag("pipeline_progress_card"),
         shape = RoundedCornerShape(14.dp),
@@ -1304,7 +1248,7 @@ private fun ProcessingPipelineCard(step: ProcessingStep) {
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "الخطوة ${step.stepNumber}/4: ${step.title}",
+                        text = "الخطوة ${step.stepNumber}/$totalSteps: ${step.title}",
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontWeight = FontWeight.Bold,
                             color = OpusTextPrimary
@@ -1312,7 +1256,7 @@ private fun ProcessingPipelineCard(step: ProcessingStep) {
                     )
                 }
                 Text(
-                    text = "${step.stepNumber * 25}%",
+                    text = "${(progress * 100).toInt()}%",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = OpusElectricCyan
@@ -1330,7 +1274,7 @@ private fun ProcessingPipelineCard(step: ProcessingStep) {
             Spacer(modifier = Modifier.height(8.dp))
 
             LinearProgressIndicator(
-                progress = { step.stepNumber / 4f },
+                progress = { progress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp)
