@@ -35,14 +35,12 @@ import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
@@ -113,38 +111,6 @@ import com.example.ui.theme.OpusTextSecondary
 import com.example.ui.theme.OpusViralEmerald
 import com.example.ui.theme.OpusVioletGlow
 import kotlinx.coroutines.launch
-
-private data class SamplePreset(
-    val title: String,
-    val sourceUrl: String,
-    val transcriptPrompt: String,
-    val durationMin: Int,
-    val iconEmoji: String
-)
-
-private val SAMPLE_PRESETS = listOf(
-    SamplePreset(
-        title = "AI Agents & Autonomous Coding",
-        sourceUrl = "https://youtube.com/watch?v=ai_agents_autonomous_coding",
-        transcriptPrompt = "Deep discussion on autonomous AI coding agents, context management, test-driven iteration, and how developer productivity is multiplying 10x.",
-        durationMin = 22,
-        iconEmoji = "🤖"
-    ),
-    SamplePreset(
-        title = "10x SaaS Growth & Organic Virality",
-        sourceUrl = "https://youtube.com/watch?v=saas_organic_virality_growth",
-        transcriptPrompt = "Business scaling breakdown explaining how to charge 10x higher prices, risk reversal frameworks, and organic $0 content distribution flywheels.",
-        durationMin = 18,
-        iconEmoji = "💼"
-    ),
-    SamplePreset(
-        title = "High Stakes Composure & The 80/20 Rule",
-        sourceUrl = "https://youtube.com/watch?v=peak_performance_mindset",
-        transcriptPrompt = "High performance psychology discussing why professionals decouple emotion from execution, eliminating low-leverage tasks to move the single needle.",
-        durationMin = 15,
-        iconEmoji = "♟️"
-    )
-)
 
 @Composable
 fun HomeScreen(
@@ -248,8 +214,9 @@ fun HomeScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                Text(
-                    text = "1 Long Video → 10 Viral Clips",
+                                        Text(
+                            text = "حوّل فيديوك إلى مقاطع قصيرة جاهزة للنشر",
+
                     style = MaterialTheme.typography.headlineMedium.copy(
                         fontWeight = FontWeight.Black,
                         color = OpusTextPrimary,
@@ -277,8 +244,9 @@ fun HomeScreen(
             }
         }
 
-        // API Key Settings Quick Card (Direct Google Flow integration)
-        item {
+        // API Key Settings Quick Card (shown only when real provider/quota data exists)
+        if (googleFlowCredits.totalCreditsMinutes > 0 || aiProviders.any { it.apiKey.isNotBlank() }) {
+            item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -371,6 +339,7 @@ fun HomeScreen(
                     )
                 }
             }
+        }
         }
 
         // Auto-Publish Setup Quick Banner Card
@@ -822,7 +791,7 @@ fun HomeScreen(
                                 style = MaterialTheme.typography.labelMedium.copy(color = OpusTextPrimary, fontWeight = FontWeight.Bold)
                             )
                             Text(
-                                text = "توليد حتى ${durationMinutes.coerceAtMost(60) / 2 + 3} مقاطع",
+                                text = "سيظهر العدد الفعلي بعد اكتمال المعالجة",
                                 fontSize = 11.sp,
                                 color = OpusElectricCyan,
                                 fontWeight = FontWeight.SemiBold
@@ -1016,11 +985,13 @@ fun HomeScreen(
 
                                 isProcessing = true
                                 coroutineScope.launch {
-                                    val targetTitle = videoTitle.ifBlank {
-                                        if (videoUrl.isNotBlank()) "Video: ${videoUrl.takeLast(12)}" else "AI Viral Project"
+                                    val targetTitle = videoTitle.trim().ifBlank {
+                                        videoUrl.trim().takeLast(12).takeIf { it.isNotBlank() }
+                                            ?: transcriptPrompt.trim().lineSequence().firstOrNull()?.take(80)
+                                            ?: "فيديو جديد"
                                     }
-                                    val targetUrl = videoUrl.ifBlank { "https://youtube.com/watch?v=sample_ai_clip" }
-                                    val targetPrompt = transcriptPrompt.ifBlank { "High impact discussion exploring key viral principles, frameworks, and stories." }
+                                    val targetUrl = videoUrl.trim()
+                                    val targetPrompt = transcriptPrompt.trim()
 
                                     try {
                                         var effectiveCaptionTheme = selectedCaptionTheme
@@ -1178,96 +1149,39 @@ fun HomeScreen(
             )
         }
 
-        // Google Flow AI Architecture Highlights
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = OpusDarkSurfaceVariant),
-                border = androidx.compose.foundation.BorderStroke(1.dp, OpusVioletGlow.copy(alpha = 0.3f))
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Psychology,
-                            contentDescription = "Flow Engine",
-                            tint = OpusElectricCyan,
-                            modifier = Modifier.size(18.dp)
+        // Recent Projects Section: render only when real Room data exists.
+        if (allProjects.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "المشاريع والمقاطع السابقة",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = OpusTextPrimary
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "ميزات خط إنتاج Google Flow AI الشخصي",
-                            style = MaterialTheme.typography.titleSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = OpusTextPrimary
-                            )
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    val features = listOf(
-                        "استخراج الهوك الأكثر جذباً للمشاهد في أول 3 ثوانٍ",
-                        "حساب معدل الانتشار الفيروسي (Virality Score 1-100)",
-                        "توليد عناوين وهاشتاغات مقترحة لـ TikTok وReels",
-                        "ترجمة حركية متحركة بنمط Hormozi وMrBeast",
-                        "اقتراحات B-roll ومشاهد مساعدة لتحسين الاحتفاظ بالجمهور"
                     )
-
-                    features.forEach { feature ->
-                        Row(
-                            modifier = Modifier.padding(vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = "Feature",
-                                tint = OpusViralEmerald,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = feature,
-                                fontSize = 11.sp,
-                                color = OpusTextSecondary
-                            )
-                        }
-                    }
+                    Text(
+                        text = "${allProjects.size} مشروع",
+                        fontSize = 12.sp,
+                        color = OpusTextSecondary
+                    )
                 }
             }
-        }
 
-        // Recent Projects Section
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "المشاريع والمقاطع السابقة",
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = OpusTextPrimary
-                    )
-                )
-                Text(
-                    text = "${allProjects.size} مشروع",
-                    fontSize = 12.sp,
-                    color = OpusTextSecondary
+            items(allProjects) { project ->
+                ProjectRowCard(
+                    project = project,
+                    onClick = { onOpenProject(project.id) }
                 )
             }
-        }
 
-        items(allProjects) { project ->
-            ProjectRowCard(
-                project = project,
-                onClick = { onOpenProject(project.id) }
-            )
-        }
-
-        item {
-            Spacer(modifier = Modifier.height(30.dp))
+            item {
+                Spacer(modifier = Modifier.height(30.dp))
+            }
         }
     }
 }

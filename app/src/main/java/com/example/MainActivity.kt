@@ -67,9 +67,10 @@ fun OpusProApp(repository: OpusRepository) {
     val googleFlowCredits by repository.googleFlowCredits.collectAsState()
     val aiProviders by repository.aiProviders.collectAsState()
 
-    // Preload sample project on first launch
+    // Remove only the legacy demo record created by older builds.
+    // New installations start empty and populate from real user actions.
     LaunchedEffect(Unit) {
-        repository.initializePreloadedProjectsIfEmpty()
+        repository.removeLegacyDemoDataIfPresent()
     }
 
     if (showApiKeyDialog) {

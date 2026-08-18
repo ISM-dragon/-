@@ -62,6 +62,35 @@ class OpusRepository(context: Context) {
     private val geminiService = GeminiClipService()
 
     private val apiPrefs = context.getSharedPreferences("opus_api_settings", Context.MODE_PRIVATE)
+
+    init {
+        migrateLegacyDemoMetrics()
+    }
+
+    private fun migrateLegacyDemoMetrics() {
+        if (apiPrefs.getBoolean("real_metrics_migrated_v1", false)) return
+
+        // Remove only the exact values shipped as demo data. Preserve any quota
+        // values the user may have configured after the first installation.
+        val hasLegacyDemoCredits = apiPrefs.getInt("total_credits_minutes", Int.MIN_VALUE) == 180 &&
+            apiPrefs.getInt("used_credits_minutes", Int.MIN_VALUE) == 35 &&
+            apiPrefs.getInt("total_requests_limit", Int.MIN_VALUE) == 1500 &&
+            apiPrefs.getInt("used_requests_count", Int.MIN_VALUE) == 84
+
+        val editor = apiPrefs.edit().putBoolean("real_metrics_migrated_v1", true)
+        if (hasLegacyDemoCredits) {
+            editor.remove("total_credits_minutes")
+                .remove("used_credits_minutes")
+                .remove("total_requests_limit")
+                .remove("used_requests_count")
+                .remove("plan_name")
+                .remove("rpm_limit")
+                .remove("active_provider_name")
+                .remove("last_reset_timestamp")
+        }
+        editor.apply()
+    }
+
     private val _customApiKey = MutableStateFlow(apiPrefs.getString("custom_gemini_key", "") ?: "")
     val customApiKey = _customApiKey.asStateFlow()
 
@@ -73,16 +102,30 @@ class OpusRepository(context: Context) {
     private val _aiProviders = MutableStateFlow<List<AiProviderConfig>>(loadAiProviders())
     val aiProviders = _aiProviders.asStateFlow()
 
+    suspend fun removeLegacyDemoDataIfPresent() = withContext(Dispatchers.IO) {
+        val demo = projectDao.getProjectByIdSync(1L)
+        val isLegacyDemo = demo?.title == "The Psychology of Peak Human Performance & Focus Protocol" &&
+            demo.sourceUrl == "https://www.youtube.com/watch?v=huberman_focus_peak"
+
+        if (isLegacyDemo) {
+            clipDao.deleteClipsForProject(demo.id)
+            viralScoreMetricDao.deleteScoresForProject(demo.id)
+            repurposingHistoryDao.deleteHistoryForProject(demo.id)
+            videoProcessingCacheDao.deleteCacheByUrl(demo.sourceUrl)
+            projectDao.deleteProjectById(demo.id)
+        }
+    }
+
     private fun loadGoogleFlowCredits(): GoogleFlowCreditInfo {
         return GoogleFlowCreditInfo(
-            totalCreditsMinutes = apiPrefs.getInt("total_credits_minutes", 180),
-            usedCreditsMinutes = apiPrefs.getInt("used_credits_minutes", 35),
-            totalRequestsLimit = apiPrefs.getInt("total_requests_limit", 1500),
-            usedRequestsCount = apiPrefs.getInt("used_requests_count", 84),
-            planName = apiPrefs.getString("plan_name", "Google Flow AI Free Tier") ?: "Google Flow AI Free Tier",
-            rpmLimit = apiPrefs.getInt("rpm_limit", 15),
-            isAutoFailoverEnabled = apiPrefs.getBoolean("is_failover_enabled", true),
-            activeProviderName = apiPrefs.getString("active_provider_name", "Google Gemini 2.5 Flash") ?: "Google Gemini 2.5 Flash",
+            totalCreditsMinutes = apiPrefs.getInt("total_credits_minutes", 0),
+            usedCreditsMinutes = apiPrefs.getInt("used_credits_minutes", 0),
+            totalRequestsLimit = apiPrefs.getInt("total_requests_limit", 0),
+            usedRequestsCount = apiPrefs.getInt("used_requests_count", 0),
+            planName = apiPrefs.getString("plan_name", "غير مُكوّن") ?: "غير مُكوّن",
+            rpmLimit = apiPrefs.getInt("rpm_limit", 0),
+            isAutoFailoverEnabled = apiPrefs.getBoolean("is_failover_enabled", false),
+            activeProviderName = apiPrefs.getString("active_provider_name", "غير متاح") ?: "غير متاح",
             lastResetTimestamp = apiPrefs.getLong("last_reset_timestamp", System.currentTimeMillis())
         )
     }
@@ -98,14 +141,14 @@ class OpusRepository(context: Context) {
 
     suspend fun resetGoogleFlowCredits() = withContext(Dispatchers.IO) {
         val reset = GoogleFlowCreditInfo(
-            totalCreditsMinutes = 180,
+            totalCreditsMinutes = 0,
             usedCreditsMinutes = 0,
-            totalRequestsLimit = 1500,
+            totalRequestsLimit = 0,
             usedRequestsCount = 0,
-            planName = "Google Flow AI Free Tier",
-            rpmLimit = 15,
-            isAutoFailoverEnabled = true,
-            activeProviderName = "Google Gemini 2.5 Flash",
+            planName = "غير مُكوّن",
+            rpmLimit = 0,
+            isAutoFailoverEnabled = false,
+            activeProviderName = "غير متاح",
             lastResetTimestamp = System.currentTimeMillis()
         )
         saveGoogleFlowCredits(reset)
@@ -133,122 +176,30 @@ class OpusRepository(context: Context) {
                 val listType = Types.newParameterizedType(List::class.java, AiProviderConfig::class.java)
                 val adapter: JsonAdapter<List<AiProviderConfig>> = moshi.adapter(listType)
                 val list = adapter.fromJson(json)
-                if (list != null && list.isNotEmpty()) return list
+                val configuredProviders = list.orEmpty().filter { it.apiKey.isNotBlank() }
+                if (configuredProviders.isNotEmpty()) return configuredProviders
             } catch (e: Exception) {
                 Log.e("OpusRepository", "Failed to parse saved ai providers", e)
             }
         }
         val currentGeminiKey = apiPrefs.getString("custom_gemini_key", "") ?: ""
-        return listOf(
-            AiProviderConfig(
-                id = "gemini_primary",
-                name = "Google Gemini (Gemini 2.5 Flash)",
-                providerType = AiProviderType.GEMINI.name,
-                apiKey = currentGeminiKey,
-                modelName = "gemini-2.5-flash",
-                priority = 1,
-                isEnabled = true,
-                totalCreditsAllocated = 180.0,
-                usedCredits = 35.0,
-                creditUnit = "Mins",
-                totalTokensProcessed = 145200L,
-                requestsCount = 84,
-                maxRequestsLimit = 1500,
-                rateLimitRpm = 15,
-                lastLatencyMs = 142L,
-                balanceStatus = "Active (Free Tier)"
-            ),
-            AiProviderConfig(
-                id = "openai_provider",
-                name = "OpenAI (GPT-4o & GPT-4o-mini)",
-                providerType = AiProviderType.OPENAI.name,
-                apiKey = "",
-                modelName = "gpt-4o-mini",
-                priority = 2,
-                isEnabled = false,
-                totalCreditsAllocated = 10.00,
-                usedCredits = 2.45,
-                creditUnit = "$",
-                totalTokensProcessed = 88400L,
-                requestsCount = 38,
-                maxRequestsLimit = 1000,
-                rateLimitRpm = 500,
-                lastLatencyMs = 210L,
-                balanceStatus = "Ready to Connect"
-            ),
-            AiProviderConfig(
-                id = "anthropic_provider",
-                name = "Anthropic (Claude 3.5 Sonnet)",
-                providerType = AiProviderType.ANTHROPIC.name,
-                apiKey = "",
-                modelName = "claude-3-5-sonnet-20241022",
-                priority = 3,
-                isEnabled = false,
-                totalCreditsAllocated = 15.00,
-                usedCredits = 4.10,
-                creditUnit = "$",
-                totalTokensProcessed = 62100L,
-                requestsCount = 22,
-                maxRequestsLimit = 1000,
-                rateLimitRpm = 50,
-                lastLatencyMs = 280L,
-                balanceStatus = "Ready to Connect"
-            ),
-            AiProviderConfig(
-                id = "openrouter_backup",
-                name = "OpenRouter (Multi-LLM Hub)",
-                providerType = AiProviderType.OPENROUTER.name,
-                apiKey = "",
-                modelName = "meta-llama/llama-3.3-70b-instruct",
-                priority = 4,
-                isEnabled = false,
-                totalCreditsAllocated = 5.00,
-                usedCredits = 0.85,
-                creditUnit = "$",
-                totalTokensProcessed = 31000L,
-                requestsCount = 14,
-                maxRequestsLimit = 500,
-                rateLimitRpm = 200,
-                lastLatencyMs = 195L,
-                balanceStatus = "Ready to Connect"
-            ),
-            AiProviderConfig(
-                id = "groq_backup",
-                name = "Groq (Llama 3.3 70B @ 750 T/s)",
-                providerType = AiProviderType.GROQ.name,
-                apiKey = "",
-                modelName = "llama-3.3-70b-versatile",
-                priority = 5,
-                isEnabled = false,
-                totalCreditsAllocated = 1000.0,
-                usedCredits = 180.0,
-                creditUnit = "Reqs",
-                totalTokensProcessed = 195000L,
-                requestsCount = 180,
-                maxRequestsLimit = 1000,
-                rateLimitRpm = 30,
-                lastLatencyMs = 88L,
-                balanceStatus = "Ready to Connect"
-            ),
-            AiProviderConfig(
-                id = "mistral_backup",
-                name = "Mistral AI (Mistral Large)",
-                providerType = AiProviderType.MISTRAL.name,
-                apiKey = "",
-                modelName = "mistral-large-latest",
-                priority = 6,
-                isEnabled = false,
-                totalCreditsAllocated = 8.00,
-                usedCredits = 1.20,
-                creditUnit = "$",
-                totalTokensProcessed = 24000L,
-                requestsCount = 12,
-                maxRequestsLimit = 500,
-                rateLimitRpm = 60,
-                lastLatencyMs = 230L,
-                balanceStatus = "Ready to Connect"
+        return if (currentGeminiKey.isBlank()) {
+            emptyList()
+        } else {
+            listOf(
+                AiProviderConfig(
+                    id = "gemini_primary",
+                    name = "Google Gemini (Gemini 2.5 Flash)",
+                    providerType = AiProviderType.GEMINI.name,
+                    apiKey = currentGeminiKey,
+                    modelName = "gemini-2.5-flash",
+                    priority = 1,
+                    isEnabled = true,
+                    creditUnit = "",
+                    balanceStatus = "مفتاح مُضاف"
+                )
             )
-        )
+        }
     }
 
     suspend fun refillProviderCredits(providerId: String, amount: Double = 10.0) = withContext(Dispatchers.IO) {
@@ -480,11 +431,11 @@ class OpusRepository(context: Context) {
 
     private val _userCreditState = MutableStateFlow(
         UserCreditState(
-            creditsRemaining = 60,
-            totalProcessedMinutes = 145,
-            currentPlan = "Pro Plan",
-            renewalDate = "September 1, 2026",
-            clipsCreatedCount = 38
+            creditsRemaining = _googleFlowCredits.value.remainingCreditsMinutes,
+            totalProcessedMinutes = apiPrefs.getInt("real_total_processed_minutes", 0),
+            currentPlan = apiPrefs.getString("plan_name", "غير مُكوّن") ?: "غير مُكوّن",
+            renewalDate = apiPrefs.getString("renewal_date", "") ?: "",
+            clipsCreatedCount = apiPrefs.getInt("real_clips_created_count", 0)
         )
     )
     val userCreditState = _userCreditState.asStateFlow()
@@ -748,11 +699,16 @@ class OpusRepository(context: Context) {
         repurposingHistoryDao.insertHistory(historyEntry)
 
         // Deduct credits
-        _userCreditState.value = _userCreditState.value.copy(
-            creditsRemaining = maxOf(0, _userCreditState.value.creditsRemaining - durationMinutes),
+        val updatedCreditState = _userCreditState.value.copy(
+            creditsRemaining = _googleFlowCredits.value.remainingCreditsMinutes,
             totalProcessedMinutes = _userCreditState.value.totalProcessedMinutes + durationMinutes,
             clipsCreatedCount = _userCreditState.value.clipsCreatedCount + clipsData.size
         )
+        _userCreditState.value = updatedCreditState
+        apiPrefs.edit()
+            .putInt("real_total_processed_minutes", updatedCreditState.totalProcessedMinutes)
+            .putInt("real_clips_created_count", updatedCreditState.clipsCreatedCount)
+            .apply()
 
         _processingStep.value = ProcessingStep.Completed
         delay(500)

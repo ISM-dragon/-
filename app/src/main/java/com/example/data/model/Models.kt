@@ -11,7 +11,7 @@ data class Project(
     val id: Long = 0,
     val title: String,
     val sourceUrl: String,
-    val sourceDurationSec: Int = 900,
+    val sourceDurationSec: Int = 0,
     val status: String = "COMPLETED", // PROCESSING, COMPLETED, FAILED
     val targetPlatform: String = "TikTok & Reels (9:16)",
     val captionTheme: String = "Opus Neon",
@@ -31,11 +31,11 @@ data class Clip(
     val endTimeSec: Int,
     val durationSec: Int,
     val viralityScore: Int, // 0 - 100
-    val hookScore: Int = 90,
-    val retentionScore: Int = 85,
-    val emotionalScore: Int = 80,
-    val shareabilityScore: Int = 88,
-    val punchlineScore: Int = 85,
+    val hookScore: Int = 0,
+    val retentionScore: Int = 0,
+    val emotionalScore: Int = 0,
+    val shareabilityScore: Int = 0,
+    val punchlineScore: Int = 0,
     val hookExplanation: String,
     val transcript: String,
     val animatedCaptionsJson: String, // serialized List<AnimatedWord>
@@ -162,14 +162,14 @@ data class AiTemplateRecommendation(
 
 @JsonClass(generateAdapter = true)
 data class GoogleFlowCreditInfo(
-    val totalCreditsMinutes: Int = 180, // Default 180 free processing minutes per cycle
-    val usedCreditsMinutes: Int = 35,
-    val totalRequestsLimit: Int = 1500, // 1500 Requests per day free tier
-    val usedRequestsCount: Int = 84,
-    val planName: String = "Google Flow AI Free Tier",
-    val rpmLimit: Int = 15,
-    val isAutoFailoverEnabled: Boolean = true,
-    val activeProviderName: String = "Google Gemini 2.5 Flash",
+    val totalCreditsMinutes: Int = 0,
+    val usedCreditsMinutes: Int = 0,
+    val totalRequestsLimit: Int = 0,
+    val usedRequestsCount: Int = 0,
+    val planName: String = "غير مُكوّن",
+    val rpmLimit: Int = 0,
+    val isAutoFailoverEnabled: Boolean = false,
+    val activeProviderName: String = "غير متاح",
     val lastResetTimestamp: Long = System.currentTimeMillis()
 ) {
     val remainingCreditsMinutes: Int
@@ -213,19 +213,19 @@ data class AiProviderConfig(
     val customBaseUrl: String = "",
     val modelName: String = "gemini-2.5-flash",
     val priority: Int = 1, // 1 = Primary, 2 = Secondary, 3 = Tertiary...
-    val isEnabled: Boolean = true,
+    val isEnabled: Boolean = false,
     val isExhausted: Boolean = false,
     val lastTestedSuccess: Boolean? = null,
     val lastTestedMessage: String = "",
-    val totalCreditsAllocated: Double = 10.0,
-    val usedCredits: Double = 1.45,
-    val creditUnit: String = "$",
-    val totalTokensProcessed: Long = 48500L,
-    val requestsCount: Int = 24,
-    val maxRequestsLimit: Int = 1000,
-    val rateLimitRpm: Int = 60,
-    val lastLatencyMs: Long = 185L,
-    val balanceStatus: String = "Healthy"
+    val totalCreditsAllocated: Double = 0.0,
+    val usedCredits: Double = 0.0,
+    val creditUnit: String = "",
+    val totalTokensProcessed: Long = 0L,
+    val requestsCount: Int = 0,
+    val maxRequestsLimit: Int = 0,
+    val rateLimitRpm: Int = 0,
+    val lastLatencyMs: Long = 0L,
+    val balanceStatus: String = "غير مُكوّن"
 ) {
     val remainingCredits: Double
         get() = (totalCreditsAllocated - usedCredits).coerceAtLeast(0.0)

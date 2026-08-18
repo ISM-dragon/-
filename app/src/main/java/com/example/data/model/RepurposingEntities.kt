@@ -55,19 +55,19 @@ data class ViralScoreMetricEntity(
     val projectId: Long,
     val clipTitle: String,
     val overallViralityScore: Int, // 0 - 100
-    val hookScore: Int = 90,
-    val retentionScore: Int = 85,
-    val emotionalScore: Int = 80,
-    val shareabilityScore: Int = 88,
-    val punchlineScore: Int = 85,
-    val tiktokFitScore: Int = 95,
-    val reelsFitScore: Int = 92,
-    val shortsFitScore: Int = 96,
-    val viralityGrade: String = "A+", // S+, S, A+, A, B
+    val hookScore: Int = 0,
+    val retentionScore: Int = 0,
+    val emotionalScore: Int = 0,
+    val shareabilityScore: Int = 0,
+    val punchlineScore: Int = 0,
+    val tiktokFitScore: Int = 0,
+    val reelsFitScore: Int = 0,
+    val shortsFitScore: Int = 0,
+    val viralityGrade: String = "غير متاح", // S+, S, A+, A, B
     val hookExplanation: String = "",
     val viralityFactorsJson: String = "[]", // Serialized list of bullet points
-    val suggestedTargetAudience: String = "Gen-Z & Mobile Scrollers",
-    val peakRetentionSec: Float = 3.5f,
+    val suggestedTargetAudience: String = "غير متاح",
+    val peakRetentionSec: Float = 0f,
     val evaluatedAt: Long = System.currentTimeMillis()
 )
 
@@ -93,7 +93,7 @@ data class RepurposingHistoryEntity(
     val actionType: String = "AI_REPURPOSE_PROCESSED", // AI_REPURPOSE_PROCESSED, DIRECT_API_PUBLISHED, EXPORTED_CLIP, CAPTION_GENERATED
     val clipsGeneratedCount: Int = 0,
     val highestViralScore: Int = 0,
-    val estimatedTimeSavedMinutes: Int = 45,
+    val estimatedTimeSavedMinutes: Int = 0,
     val status: String = "SUCCESS", // SUCCESS, PENDING, FAILED
     val targetPlatform: String = "TikTok & Shorts",
     val details: String = "",
