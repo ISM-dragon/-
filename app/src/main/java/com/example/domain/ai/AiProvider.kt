@@ -34,6 +34,8 @@ sealed class AiExecutionResult<out T> {
 interface AiProvider {
     val providerType: AiProviderType
     val config: AiProviderConfig
+    val capabilities: Set<AiCapability>
+        get() = providerType.defaultCapabilities()
 
     suspend fun testConnection(): Pair<Boolean, String>
 

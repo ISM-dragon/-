@@ -3,6 +3,7 @@ package com.example.data.model
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.squareup.moshi.JsonClass
+import com.example.domain.analysis.WordTimestamp
 
 @Entity(tableName = "projects")
 @JsonClass(generateAdapter = true)
@@ -92,7 +93,8 @@ data class ClipGenerationData(
     val keywords: List<String>,
     val emojis: List<String>,
     val bRollIdeas: List<BRollIdea>,
-    val socialCopies: List<SocialPostCopy>
+    val socialCopies: List<SocialPostCopy>,
+    val wordTimestamps: List<WordTimestamp> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)

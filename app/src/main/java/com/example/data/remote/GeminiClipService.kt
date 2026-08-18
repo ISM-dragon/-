@@ -14,6 +14,7 @@ import com.example.data.model.DedicatedCaptionResult
 import com.example.data.model.DirectApiPublishLog
 import com.example.data.model.DirectPlatformApiCredentials
 import com.example.data.model.SocialPostCopy
+import com.example.domain.analysis.WordTimestamp
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
@@ -529,7 +530,7 @@ class GeminiClipService(private val context: Context? = null) {
             }
         }
 
-        return@withContext generatePrecomputedRealisticClips(title, transcriptOrPrompt)
+        throw IllegalStateException("لم يُرجع أي مزود AI مقاطع صالحة؛ لا توجد نتيجة محلية بديلة وهمية.")
     }
 
     private fun parseClipsFromJson(jsonText: String): List<ClipGenerationData> {
@@ -543,14 +544,18 @@ class GeminiClipService(private val context: Context? = null) {
                 if (bRollArray != null) {
                     for (j in 0 until bRollArray.length()) {
                         val bObj = bRollArray.getJSONObject(j)
-                        bRollList.add(
-                            BRollIdea(
-                                title = bObj.optString("title", "Visual Overlay"),
-                                timestampSec = bObj.optInt("timestampSec", 5),
-                                visualPrompt = bObj.optString("visualPrompt", "Cinematic zoom in"),
-                                soundEffect = bObj.optString("soundEffect", "Whoosh")
+                        val bTitle = bObj.optString("title").trim()
+                        val bPrompt = bObj.optString("visualPrompt").trim()
+                        if (bTitle.isNotBlank() && bPrompt.isNotBlank()) {
+                            bRollList.add(
+                                BRollIdea(
+                                    title = bTitle,
+                                    timestampSec = bObj.optInt("timestampSec", -1),
+                                    visualPrompt = bPrompt,
+                                    soundEffect = bObj.optString("soundEffect").trim()
+                                )
                             )
-                        )
+                        }
                     }
                 }
 
@@ -566,14 +571,19 @@ class GeminiClipService(private val context: Context? = null) {
                                 tagsList.add(tagsArray.getString(k))
                             }
                         }
-                        socialList.add(
-                            SocialPostCopy(
-                                platform = sObj.optString("platform", "TikTok"),
-                                caption = sObj.optString("caption", "Wait until the end..."),
-                                hook = sObj.optString("hook", "Did you know this?"),
-                                hashtags = tagsList
+                        val platform = sObj.optString("platform").trim()
+                        val caption = sObj.optString("caption").trim()
+                        val hook = sObj.optString("hook").trim()
+                        if (platform.isNotBlank() && caption.isNotBlank() && hook.isNotBlank()) {
+                            socialList.add(
+                                SocialPostCopy(
+                                    platform = platform,
+                                    caption = caption,
+                                    hook = hook,
+                                    hashtags = tagsList
+                                )
                             )
-                        )
+                        }
                     }
                 }
 
@@ -582,6 +592,25 @@ class GeminiClipService(private val context: Context? = null) {
                 if (keywordsArray != null) {
                     for (k in 0 until keywordsArray.length()) {
                         keywordsList.add(keywordsArray.getString(k))
+                    }
+                }
+
+                val wordTimestamps = mutableListOf<WordTimestamp>()
+                val wordTimestampArray = obj.optJSONArray("wordTimestamps")
+                if (wordTimestampArray != null) {
+                    for (k in 0 until wordTimestampArray.length()) {
+                        val wordObject = wordTimestampArray.getJSONObject(k)
+                        val start = wordObject.optDouble("startSec", -1.0).toFloat()
+                        val end = wordObject.optDouble("endSec", -1.0).toFloat()
+                        if (start >= 0f && end > start) {
+                            wordTimestamps += WordTimestamp(
+                                word = wordObject.optString("word").trim(),
+                                startSec = start,
+                                endSec = end,
+                                confidence = wordObject.optDouble("confidence", 1.0).toFloat().coerceIn(0f, 1f),
+                                speakerId = wordObject.optString("speakerId").takeIf { it.isNotBlank() }
+                            )
+                        }
                     }
                 }
 
@@ -595,7 +624,7 @@ class GeminiClipService(private val context: Context? = null) {
 
                 result.add(
                     ClipGenerationData(
-                        title = obj.optString("title").takeIf { it.isNotBlank() } ?: "Clip ${i + 1}",
+                        title = obj.optString("title").trim(),
                         startTimeSec = obj.optInt("startTimeSec", -1),
                         endTimeSec = obj.optInt("endTimeSec", -1),
                         viralityScore = obj.optInt("viralityScore", 0),
@@ -609,7 +638,8 @@ class GeminiClipService(private val context: Context? = null) {
                         keywords = keywordsList,
                         emojis = emojisList,
                         bRollIdeas = bRollList,
-                        socialCopies = socialList
+                        socialCopies = socialList,
+                        wordTimestamps = wordTimestamps
                     )
                 )
             }

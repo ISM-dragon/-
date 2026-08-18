@@ -18,6 +18,7 @@ import android.provider.MediaStore
 import android.util.Log
 import com.example.data.db.OpusDatabase
 import com.example.data.model.AiProviderConfig
+import com.example.data.model.AiUsageEntity
 import com.example.data.model.AiProviderType
 import com.example.data.model.AiTemplateRecommendation
 import com.example.data.model.AnimatedWord
@@ -30,6 +31,7 @@ import com.example.data.model.DirectApiPublishLog
 import com.example.data.model.DirectPlatformApiCredentials
 import com.example.data.model.GoogleFlowCreditInfo
 import com.example.data.model.Project
+import com.example.data.model.PipelineCheckpointEntity
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.SocialPostCopy
@@ -37,9 +39,14 @@ import com.example.data.model.UserCreditState
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
+import com.example.data.remote.SpeechToTextService
+import com.example.data.video.CaptionSidecarWriter
 import com.example.data.video.FaceTrackingAnalyzer
+import com.example.data.video.LocalMediaAnalyzer
 import com.example.data.video.Media3VideoProcessor
 import com.example.data.worker.VideoProcessingWorker
+import com.example.domain.analysis.AnalysisValidator
+import com.example.domain.analysis.Transcript
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -72,6 +79,8 @@ class OpusRepository(context: Context) {
     private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
     private val db = OpusDatabase.getDatabase(context)
     private val projectDao = db.projectDao()
+    private val aiUsageDao = db.aiUsageDao()
+    private val pipelineCheckpointDao = db.pipelineCheckpointDao()
     private val clipDao = db.clipDao()
     private val videoProcessingCacheDao = db.videoProcessingCacheDao()
     private val viralScoreMetricDao = db.viralScoreMetricDao()
@@ -81,6 +90,8 @@ class OpusRepository(context: Context) {
     private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
     val geminiService = GeminiClipService(appContext)
     private val videoProcessor = Media3VideoProcessor(appContext)
+    private val localMediaAnalyzer = LocalMediaAnalyzer(appContext)
+    private val speechToTextService = SpeechToTextService(appContext)
     private val faceTrackingAnalyzer = FaceTrackingAnalyzer(appContext)
     val aiRouter = com.example.domain.ai.IntelligentAiRouter(
         listOf(
@@ -640,6 +651,37 @@ class OpusRepository(context: Context) {
     fun getClipById(clipId: Long): Flow<Clip?> = clipDao.getClipById(clipId)
     fun getViralScoresForProject(projectId: Long): Flow<List<ViralScoreMetricEntity>> = viralScoreMetricDao.getScoresForProject(projectId)
     fun getViralScoreForClip(clipId: Long): Flow<ViralScoreMetricEntity?> = viralScoreMetricDao.getScoreForClip(clipId)
+
+    fun observePipelineCheckpoints(jobId: String): Flow<List<PipelineCheckpointEntity>> = pipelineCheckpointDao.observeJob(jobId)
+    val recentAiUsage: Flow<List<AiUsageEntity>> = aiUsageDao.observeRecent()
+
+    suspend fun recordAiUsage(record: AiUsageEntity) = withContext(Dispatchers.IO) {
+        aiUsageDao.insert(record)
+    }
+
+    suspend fun savePipelineCheckpoint(
+        jobId: String,
+        projectId: Long,
+        stage: String,
+        status: String,
+        progress: Float,
+        message: String,
+        errorMessage: String? = null,
+        artifactPath: String? = null
+    ) = withContext(Dispatchers.IO) {
+        pipelineCheckpointDao.upsert(
+            PipelineCheckpointEntity(
+                jobId = jobId,
+                projectId = projectId,
+                stage = stage,
+                status = status,
+                progress = progress.coerceIn(0f, 1f),
+                message = message,
+                errorMessage = errorMessage,
+                artifactPath = artifactPath
+            )
+        )
+    }
     fun getCachedProcessingByUrl(sourceUrl: String): Flow<VideoProcessingCacheEntity?> = videoProcessingCacheDao.getCacheByUrl(sourceUrl)
 
     suspend fun clearVideoProcessingCache() = withContext(Dispatchers.IO) {
@@ -654,6 +696,19 @@ class OpusRepository(context: Context) {
         repurposingHistoryDao.clearAllHistory()
     }
 
+    suspend fun transcribeLocalMediaDetailed(sourceUrl: String, language: String? = null): Result<Transcript> = withContext(Dispatchers.IO) {
+        val uri = sourceUrl.toMediaUriOrNull()
+            ?: return@withContext Result.failure(IllegalArgumentException("مصدر transcription يجب أن يكون Uri محليًا."))
+        val sttKey = _aiProviders.value.firstOrNull {
+            it.isEnabled && it.apiKey.isNotBlank() &&
+                (it.providerType == AiProviderType.OPENAI.name || it.providerType == AiProviderType.GROQ.name)
+        }?.apiKey.orEmpty()
+        speechToTextService.transcribe(uri, sttKey, language)
+    }
+
+    suspend fun transcribeLocalMedia(sourceUrl: String, language: String? = null): Result<String> =
+        transcribeLocalMediaDetailed(sourceUrl, language).map { it.text }
+
     suspend fun processNewVideo(
         title: String,
         sourceUrl: String,
@@ -665,38 +720,47 @@ class OpusRepository(context: Context) {
         val startTime = System.currentTimeMillis()
 
         _processingStep.value = ProcessingStep.Transcribing
-        delay(800)
 
-        // Check local Room cache for instant response if previously analyzed
+        // Check local Room cache for metadata only; a cache hit never fabricates clips.
         val cachedEntry = if (sourceUrl.isNotBlank()) videoProcessingCacheDao.getCacheByUrlSync(sourceUrl) else null
-        if (cachedEntry != null) {
-            videoProcessingCacheDao.recordCacheHit(cachedEntry.id)
+        if (cachedEntry != null) videoProcessingCacheDao.recordCacheHit(cachedEntry.id)
+
+        val inputMediaUri = sourceUrl.toMediaUriOrNull()
+        val mediaAnalysis = inputMediaUri?.let { uri ->
+            localMediaAnalyzer.analyze(uri).getOrElse { throw it }
+        }
+        val sourceMetadata = mediaAnalysis?.metadata
+        val actualDurationSec = sourceMetadata?.durationSec ?: (durationMinutes * 60)
+        val actualDurationMinutes = ((actualDurationSec + 59) / 60).coerceAtLeast(1)
+        val effectiveTranscript = if (inputMediaUri != null && transcriptOrPrompt.isBlank()) {
+            val sttKey = _aiProviders.value.firstOrNull {
+                it.isEnabled && it.apiKey.isNotBlank() &&
+                    (it.providerType == AiProviderType.OPENAI.name || it.providerType == AiProviderType.GROQ.name)
+            }?.apiKey.orEmpty()
+            speechToTextService.transcribe(inputMediaUri, sttKey).getOrElse { throw it }.text
+        } else transcriptOrPrompt.trim()
+        if (inputMediaUri != null && effectiveTranscript.isBlank()) {
+            throw IllegalStateException("لا يمكن تحليل فيديو محلي دون transcript فعلي أو مزود Speech-to-Text مفعّل.")
         }
 
         _processingStep.value = ProcessingStep.ScanningHooks
-        delay(900)
-
-        val inputMediaUri = sourceUrl.toMediaUriOrNull()
-        val sourceMetadata = inputMediaUri?.let(videoProcessor::inspectSource)
-        val actualDurationSec = sourceMetadata?.durationSec ?: (durationMinutes * 60)
-        val actualDurationMinutes = ((actualDurationSec + 59) / 60).coerceAtLeast(1)
-        val clipsData = geminiService.analyzeAndGenerateClips(
+        val aiClips = geminiService.analyzeAndGenerateClips(
             title = title,
             sourceUrl = sourceUrl,
-            transcriptOrPrompt = transcriptOrPrompt,
+            transcriptOrPrompt = effectiveTranscript,
             durationMinutes = actualDurationMinutes,
             providers = _aiProviders.value,
             videoUri = inputMediaUri?.takeIf { it.scheme == "content" || it.scheme == "file" }
-        ).asSequence()
-            .filter { clip ->
-                clip.startTimeSec >= 0 &&
-                    clip.endTimeSec > clip.startTimeSec &&
-                    clip.endTimeSec <= actualDurationSec &&
-                    clip.endTimeSec - clip.startTimeSec >= 5
-            }
+        ).map(AnalysisValidator::normalizeScores)
             .distinctBy { "${it.startTimeSec}:${it.endTimeSec}" }
             .take(10)
-            .toList()
+        val validation = AnalysisValidator.validateClips(aiClips, actualDurationSec)
+        if (!validation.isValid) {
+            throw IllegalStateException(
+                "مخرجات تحليل المقاطع غير صالحة: ${validation.issues.take(5).joinToString { it.message }}"
+            )
+        }
+        val clipsData = aiClips
         if (clipsData.isEmpty()) {
             _processingStep.value = ProcessingStep.Idle
             throw IllegalStateException(
@@ -704,11 +768,26 @@ class OpusRepository(context: Context) {
             )
         }
 
-        // Deduct Google Flow Credits
+        recordAiUsage(
+            AiUsageEntity(
+                provider = _aiProviders.value.firstOrNull { it.isEnabled && it.apiKey.isNotBlank() }?.name ?: "configured-provider",
+                model = _aiProviders.value.firstOrNull { it.isEnabled && it.apiKey.isNotBlank() }?.modelName ?: "unknown",
+                requestType = "clip_analysis",
+                inputUnits = null,
+                outputUnits = null,
+                audioDurationSec = mediaAnalysis?.metadata?.durationSec,
+                videoDurationSec = actualDurationSec,
+                latencyMs = System.currentTimeMillis() - startTime,
+                success = true,
+                estimatedCostUsd = null,
+                isEstimate = false
+            )
+        )
+
+        // Deduct Google Flow Credits only after validated AI output.
         deductGoogleFlowCredits(actualDurationMinutes)
 
         _processingStep.value = ProcessingStep.CalculatingScores
-        delay(700)
 
         val maxScore = clipsData.maxOfOrNull { it.viralityScore } ?: 90
         val actualTitle = title.ifBlank { "Viral Video Repurposing Project" }
@@ -729,7 +808,6 @@ class OpusRepository(context: Context) {
         val newProjectId = projectDao.insertProject(project)
 
         _processingStep.value = ProcessingStep.StylingCaptions
-        delay(700)
 
         val clipEntities = clipsData.map { clipData ->
             createClipEntity(
@@ -773,6 +851,7 @@ class OpusRepository(context: Context) {
                     ) { progress ->
                         _processingStep.value = ProcessingStep.StylingCaptions
                     }
+                    CaptionSidecarWriter.writeWebVtt(output, data.wordTimestamps, data.keywords)
                     storedClip?.let { clipDao.updateExportPath(it.id, output.absolutePath) }
                 } catch (error: Exception) {
                     exportFailures++
@@ -796,7 +875,7 @@ class OpusRepository(context: Context) {
             detectedLanguage = detectLanguageFromText(transcriptOrPrompt),
             speakerCount = -1,
             audioSummary = "",
-            fullTranscript = transcriptOrPrompt.ifBlank { clipsData.joinToString("\n") { it.transcript } },
+            fullTranscript = effectiveTranscript.ifBlank { clipsData.joinToString("\n") { it.transcript } },
             rawAnalysisJson = "{}",
             processingDurationMs = processingDurationMs,
             cacheHitCount = 1,
@@ -869,7 +948,6 @@ class OpusRepository(context: Context) {
             .apply()
 
         _processingStep.value = ProcessingStep.Completed
-        delay(500)
         _processingStep.value = ProcessingStep.Idle
 
         return@withContext newProjectId
@@ -920,31 +998,29 @@ class OpusRepository(context: Context) {
         data: ClipGenerationData,
         captionTheme: String
     ): Clip {
-        val words = data.transcript.split(" ")
-        val duration = maxOf(15, data.endTimeSec - data.startTimeSec)
-        val timePerWord = duration.toFloat() / maxOf(1, words.size)
-
-        val animatedWords = words.mapIndexed { index, word ->
-            val cleanWord = word.replace(Regex("[^A-Za-z0-9]"), "")
-            val isHigh = data.keywords.any { it.equals(cleanWord, ignoreCase = true) }
-            val emoji = if (isHigh && index < data.emojis.size) data.emojis[index % data.emojis.size] else ""
-            val color = when (captionTheme) {
-                "Opus Neon" -> if (isHigh) "#38BDF8" else "#FFFFFF"
-                "MrBeast Yellow" -> if (isHigh) "#FACC15" else "#FFFFFF"
-                "Ali Abdaal" -> if (isHigh) "#F43F5E" else "#F1F5F9"
-                "Cyber Green" -> if (isHigh) "#10B981" else "#E2E8F0"
-                else -> if (isHigh) "#A855F7" else "#FFFFFF"
+        val duration = maxOf(5, data.endTimeSec - data.startTimeSec)
+        val animatedWords = data.wordTimestamps
+            .filter { it.word.isNotBlank() && it.startSec >= 0f && it.endSec > it.startSec && it.endSec <= duration }
+            .mapIndexed { index, timestamp ->
+                val cleanWord = timestamp.word.replace(Regex("[^A-Za-z0-9\\u0600-\\u06FF]"), "")
+                val isHigh = data.keywords.any { it.equals(cleanWord, ignoreCase = true) }
+                val emoji = if (isHigh && index < data.emojis.size) data.emojis[index] else ""
+                val color = when (captionTheme) {
+                    "Opus Neon" -> if (isHigh) "#38BDF8" else "#FFFFFF"
+                    "MrBeast Yellow" -> if (isHigh) "#FACC15" else "#FFFFFF"
+                    "Ali Abdaal" -> if (isHigh) "#F43F5E" else "#F1F5F9"
+                    "Cyber Green" -> if (isHigh) "#10B981" else "#E2E8F0"
+                    else -> if (isHigh) "#A855F7" else "#FFFFFF"
+                }
+                AnimatedWord(
+                    word = timestamp.word,
+                    startSec = timestamp.startSec,
+                    endSec = timestamp.endSec,
+                    isHighlight = isHigh,
+                    emoji = emoji,
+                    colorHex = color
+                )
             }
-
-            AnimatedWord(
-                word = word,
-                startSec = index * timePerWord,
-                endSec = (index + 1) * timePerWord,
-                isHighlight = isHigh,
-                emoji = emoji,
-                colorHex = color
-            )
-        }
 
         val animatedWordsAdapter: JsonAdapter<List<AnimatedWord>> = moshi.adapter(
             Types.newParameterizedType(List::class.java, AnimatedWord::class.java)
