@@ -731,11 +731,13 @@ class GeminiClipService(private val context: Context? = null) {
                     }
                 }
             } catch (e: Exception) {
-                Log.e("GeminiClipService", "STT Gemini call failed", e)
+                Log.e("GeminiClipService", "STT Gemini call failed; no timed captions were generated", e)
             }
         }
 
-        throw IllegalStateException("لم تتوفر نتيجة Speech-to-Text حقيقية لإنشاء توقيتات الكلمات.")
+        // Never fabricate timestamps. The caller can display an explicit
+        // unavailable state and retry once a real transcription provider exists.
+        return@withContext emptyList()
     }
 
     private fun parseWordsFromJson(jsonText: String, captionTheme: String): List<AnimatedWord> {
