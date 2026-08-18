@@ -670,15 +670,33 @@ fun ClipStudioScreen(
                 Button(
                     onClick = {
                         if (isExporting) return@Button
+                        val clipToExport = activeClip ?: return@Button
                         isExporting = true
+                        exportProgress = 0
                         coroutineScope.launch {
-                            for (p in 10..100 step 20) {
-                                exportProgress = p
-                                delay(180)
+                            try {
+                                val output = repository.exportClipToFile(
+                                    clipId = clipToExport.id,
+                                    burnInSubtitles = burnInSubtitles,
+                                    removeWatermark = removeWatermark,
+                                    aspectRatioName = selectedLayout,
+                                    onProgress = { progress -> exportProgress = progress }
+                                )
+                                isExporting = false
+                                showExportModal = false
+                                Toast.makeText(
+                                    context,
+                                    "اكتمل التصدير الحقيقي: ${output.name}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } catch (error: Exception) {
+                                isExporting = false
+                                Toast.makeText(
+                                    context,
+                                    "فشل التصدير: ${error.localizedMessage}",
+                                    Toast.LENGTH_LONG
+                                ).show()
                             }
-                            isExporting = false
-                            showExportModal = false
-                            Toast.makeText(context, "Exported ${activeClip?.title} in $exportResolution! Download complete.", Toast.LENGTH_LONG).show()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = OpusPrimaryViolet),

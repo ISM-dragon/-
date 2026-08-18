@@ -5,6 +5,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import android.os.Environment
 import android.util.Log
 import com.example.data.db.OpusDatabase
@@ -21,6 +27,7 @@ import com.example.data.model.DirectApiPublishLog
 import com.example.data.model.DirectPlatformApiCredentials
 import com.example.data.model.GoogleFlowCreditInfo
 import com.example.data.model.Project
+import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.SocialPostCopy
 import com.example.data.model.UserCreditState
@@ -28,6 +35,7 @@ import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
 import com.example.data.video.Media3VideoProcessor
+import com.example.data.worker.VideoProcessingWorker
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -43,6 +51,7 @@ import java.io.File
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import org.json.JSONObject
 
 sealed class ProcessingStep(val stepNumber: Int, val title: String, val description: String) {
@@ -63,6 +72,7 @@ class OpusRepository(context: Context) {
     private val videoProcessingCacheDao = db.videoProcessingCacheDao()
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
+    private val processingJobDao = db.processingJobDao()
     private val appContext = context.applicationContext
     private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
     val geminiService = GeminiClipService(appContext)
@@ -553,6 +563,72 @@ class OpusRepository(context: Context) {
     val topViralScoreMetrics: Flow<List<ViralScoreMetricEntity>> = viralScoreMetricDao.getTopViralClips(15)
     val totalTimeSavedMinutes: Flow<Int?> = repurposingHistoryDao.getTotalEstimatedTimeSaved()
     val totalClipsFromHistory: Flow<Int?> = repurposingHistoryDao.getTotalClipsGenerated()
+    val processingJobs: Flow<List<ProcessingJobEntity>> = processingJobDao.observeAll()
+
+    suspend fun enqueueVideoProcessing(
+        title: String,
+        sourceUri: String,
+        transcriptOrPrompt: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String
+    ): String = withContext(Dispatchers.IO) {
+        require(title.isNotBlank()) { "عنوان الفيديو مطلوب." }
+        require(sourceUri.isNotBlank()) { "مصدر الفيديو مطلوب." }
+        require(durationMinutes > 0) { "مدة الفيديو غير صالحة." }
+
+        val jobId = UUID.randomUUID().toString()
+        processingJobDao.upsert(
+            ProcessingJobEntity(
+                jobId = jobId,
+                title = title,
+                sourceUri = sourceUri,
+                transcriptOrPrompt = transcriptOrPrompt,
+                durationMinutes = durationMinutes,
+                targetPlatform = targetPlatform,
+                captionTheme = captionTheme
+            )
+        )
+
+        val input = workDataOf(
+            VideoProcessingWorker.KEY_JOB_ID to jobId,
+            VideoProcessingWorker.KEY_TITLE to title,
+            VideoProcessingWorker.KEY_SOURCE_URI to sourceUri,
+            VideoProcessingWorker.KEY_TRANSCRIPT to transcriptOrPrompt,
+            VideoProcessingWorker.KEY_DURATION_MINUTES to durationMinutes,
+            VideoProcessingWorker.KEY_TARGET_PLATFORM to targetPlatform,
+            VideoProcessingWorker.KEY_CAPTION_THEME to captionTheme
+        )
+        val request = OneTimeWorkRequestBuilder<VideoProcessingWorker>()
+            .setInputData(input)
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .addTag("opus_video_processing")
+            .build()
+
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            "opus_video_processing_$jobId",
+            ExistingWorkPolicy.KEEP,
+            request
+        )
+        jobId
+    }
+
+    fun observeProcessingJob(jobId: String): Flow<ProcessingJobEntity?> = processingJobDao.observe(jobId)
+
+    suspend fun cancelVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
+        WorkManager.getInstance(appContext).cancelUniqueWork("opus_video_processing_$jobId")
+        processingJobDao.updateState(
+            jobId = jobId,
+            status = ProcessingJobEntity.STATUS_CANCELLED,
+            progress = 0,
+            stage = "CANCELLED",
+            errorMessage = "تم إلغاء المهمة بواسطة المستخدم."
+        )
+    }
 
     fun getClipsForProject(projectId: Long): Flow<List<Clip>> = clipDao.getClipsForProject(projectId)
     fun getProjectById(projectId: Long): Flow<Project?> = projectDao.getProjectById(projectId)
@@ -571,99 +647,6 @@ class OpusRepository(context: Context) {
 
     suspend fun clearAllRepurposingHistory() = withContext(Dispatchers.IO) {
         repurposingHistoryDao.clearAllHistory()
-    }
-
-    suspend fun initializePreloadedProjectsIfEmpty() = withContext(Dispatchers.IO) {
-        val existing = projectDao.getProjectByIdSync(1)
-        if (existing == null) {
-            // Seed a realistic project with viral clips
-            val initialProject = Project(
-                id = 1,
-                title = "The Psychology of Peak Human Performance & Focus Protocol",
-                sourceUrl = "https://www.youtube.com/watch?v=huberman_focus_peak",
-                sourceDurationSec = 1420,
-                status = "COMPLETED",
-                targetPlatform = "TikTok & Reels (9:16)",
-                captionTheme = "Opus Neon",
-                clipCount = 3,
-                bestViralityScore = 98,
-                createdAt = System.currentTimeMillis() - 86400000
-            )
-            projectDao.insertProject(initialProject)
-
-            val clipsData = geminiService.generatePrecomputedRealisticClips(
-                initialProject.title,
-                "Huberman Lab Podcast Neuroscience and Morning Sunlight Protocol"
-            )
-
-            val clipEntities = clipsData.mapIndexed { index, clipData ->
-                createClipEntity(
-                    projectId = 1,
-                    data = clipData,
-                    captionTheme = "Opus Neon"
-                )
-            }
-            clipDao.insertClips(clipEntities)
-
-            // Seed initial video processing cache metadata
-            val cacheEntity = VideoProcessingCacheEntity(
-                sourceUrl = initialProject.sourceUrl,
-                videoHash = "hash_huberman_1420",
-                videoTitle = initialProject.title,
-                sourceDurationSec = initialProject.sourceDurationSec,
-                resolution = "1080p (9:16 Optimized)",
-                detectedLanguage = "en",
-                speakerCount = 2,
-                audioSummary = "High-energy neuroscience discourse covering early morning dopamine baseline and circadian rhythm sunlight triggers.",
-                fullTranscript = "In the first 60 minutes after waking, getting bright light into your eyes sets your circadian rhythm and elevates baseline dopamine for optimal focus...",
-                rawAnalysisJson = "{}",
-                processingDurationMs = 3400L,
-                cacheHitCount = 2,
-                cachedAt = System.currentTimeMillis() - 86400000
-            )
-            videoProcessingCacheDao.insertOrUpdateCache(cacheEntity)
-
-            // Seed granular viral score metrics for clips
-            val initialScores = clipsData.mapIndexed { index, clipData ->
-                ViralScoreMetricEntity(
-                    clipId = (index + 1).toLong(),
-                    projectId = 1,
-                    clipTitle = clipData.title,
-                    overallViralityScore = clipData.viralityScore,
-                    hookScore = clipData.hookScore,
-                    retentionScore = clipData.retentionScore,
-                    emotionalScore = clipData.emotionalScore,
-                    shareabilityScore = clipData.shareabilityScore,
-                    punchlineScore = clipData.punchlineScore,
-                    tiktokFitScore = 96,
-                    reelsFitScore = 93,
-                    shortsFitScore = 98,
-                    viralityGrade = if (clipData.viralityScore >= 95) "S+" else "A+",
-                    hookExplanation = clipData.hookExplanation,
-                    viralityFactorsJson = "[\"Strong opening visual question\", \"High dopamine pacing\", \"Strong punchline takeaway\"]",
-                    suggestedTargetAudience = "Self-improvement & Biohacking Enthusiasts",
-                    peakRetentionSec = 3.8f,
-                    evaluatedAt = System.currentTimeMillis() - 86400000
-                )
-            }
-            viralScoreMetricDao.insertScores(initialScores)
-
-            // Seed initial repurposing history log
-            val initialHistory = RepurposingHistoryEntity(
-                projectId = 1,
-                videoTitle = initialProject.title,
-                sourceUrl = initialProject.sourceUrl,
-                actionType = "AI_REPURPOSE_PROCESSED",
-                clipsGeneratedCount = 3,
-                highestViralScore = 98,
-                estimatedTimeSavedMinutes = 65,
-                status = "SUCCESS",
-                targetPlatform = "TikTok & Reels (9:16)",
-                details = "3 viral shorts extracted with dynamic neon captions and auto-hook detection.",
-                timestamp = System.currentTimeMillis() - 86400000
-            )
-            repurposingHistoryDao.insertHistory(initialHistory)
-        }
     }
 
     suspend fun processNewVideo(
@@ -780,7 +763,8 @@ class OpusRepository(context: Context) {
                         outputFile = output,
                         startTimeSec = data.startTimeSec,
                         endTimeSec = data.endTimeSec,
-                        vertical = true
+                        vertical = true,
+                        captionCues = storedClip?.let(::decodeCaptionCues).orEmpty()
                     ) { progress ->
                         _processingStep.value = ProcessingStep.StylingCaptions
                     }
@@ -900,6 +884,21 @@ class OpusRepository(context: Context) {
         }
     }
 
+    private fun decodeCaptionCues(clip: Clip): List<com.example.data.video.CaptionCue> {
+        return runCatching {
+            val type = Types.newParameterizedType(List::class.java, AnimatedWord::class.java)
+            val words: List<AnimatedWord> = moshi.adapter<List<AnimatedWord>>(type).fromJson(clip.animatedCaptionsJson).orEmpty()
+            words.map {
+                com.example.data.video.CaptionCue(
+                    text = listOfNotNull(it.emoji.takeIf(String::isNotBlank), it.word.takeIf(String::isNotBlank)).joinToString(" "),
+                    startSec = it.startSec,
+                    endSec = it.endSec,
+                    isHighlight = it.isHighlight
+                )
+            }.filter { it.text.isNotBlank() && it.endSec > it.startSec }
+        }.getOrDefault(emptyList())
+    }
+
     private fun createClipEntity(
         projectId: Long,
         data: ClipGenerationData,
@@ -961,6 +960,43 @@ class OpusRepository(context: Context) {
             layoutType = "9:16 Full Screen",
             isFavorite = data.viralityScore >= 95
         )
+    }
+
+    suspend fun exportClipToFile(
+        clipId: Long,
+        burnInSubtitles: Boolean,
+        removeWatermark: Boolean,
+        aspectRatioName: String = "9:16",
+        onProgress: (Int) -> Unit = {}
+    ): File = withContext(Dispatchers.IO) {
+        val clip = clipDao.getClipByIdSync(clipId) ?: error("المقطع غير موجود.")
+        val project = projectDao.getProjectByIdSync(clip.projectId) ?: error("المشروع غير موجود.")
+        val inputUri = project.sourceUrl.toMediaUriOrNull()
+            ?: error("مصدر الفيديو الأصلي غير متاح محلياً لإعادة التصدير.")
+        val ratio = when {
+            aspectRatioName.contains("1:1") -> com.example.data.video.ExportAspectRatio.SQUARE_1_1
+            aspectRatioName.contains("4:5") -> com.example.data.video.ExportAspectRatio.PORTRAIT_4_5
+            aspectRatioName.contains("16:9") -> com.example.data.video.ExportAspectRatio.LANDSCAPE_16_9
+            else -> com.example.data.video.ExportAspectRatio.VERTICAL_9_16
+        }
+        val exportDirectory = File(
+            appContext.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: appContext.cacheDir,
+            "opus_clips/${clip.projectId}/manual_exports"
+        )
+        val output = File(exportDirectory, "clip_${clip.id}_${System.currentTimeMillis()}.mp4")
+        videoProcessor.exportClip(
+            inputUri = inputUri,
+            outputFile = output,
+            startTimeSec = clip.startTimeSec,
+            endTimeSec = clip.endTimeSec,
+            vertical = ratio == com.example.data.video.ExportAspectRatio.VERTICAL_9_16,
+            aspectRatio = ratio,
+            captionCues = if (burnInSubtitles) decodeCaptionCues(clip) else emptyList(),
+            watermarkText = if (removeWatermark) "" else "Opus Pro",
+            onProgress = onProgress
+        )
+        clipDao.updateExportPath(clip.id, output.absolutePath)
+        output
     }
 
     suspend fun toggleFavorite(clipId: Long, currentVal: Boolean) = withContext(Dispatchers.IO) {

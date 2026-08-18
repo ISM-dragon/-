@@ -64,6 +64,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -93,6 +94,7 @@ import androidx.compose.material3.SwitchDefaults
 import com.example.data.model.AiTemplateRecommendation
 import com.example.data.model.AutoPublishResult
 import com.example.data.model.Clip
+import com.example.data.model.ProcessingJobEntity
 import com.example.data.repository.OpusRepository
 import com.example.data.repository.ProcessingStep
 import com.example.ui.components.AutoPublishResultDialog
@@ -150,6 +152,25 @@ fun VideoUploadScreen(
     val autoPublishConfig by repository.autoPublishConfig.collectAsState()
     var autoPublishDialogData by remember { mutableStateOf<Pair<Clip, AutoPublishResult>?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
+    var activeProcessingJobId by remember { mutableStateOf<String?>(null) }
+    val processingJobFlow = remember(activeProcessingJobId) {
+        activeProcessingJobId?.let(repository::observeProcessingJob)
+    }
+    val processingJob by processingJobFlow?.collectAsState(initial = null)
+        ?: remember { mutableStateOf<ProcessingJobEntity?>(null) }
+
+    LaunchedEffect(processingJob?.status, processingJob?.outputProjectId) {
+        val completedJob = processingJob
+        if (completedJob?.status == ProcessingJobEntity.STATUS_SUCCEEDED && completedJob.outputProjectId > 0L) {
+            isProcessing = false
+            activeProcessingJobId = null
+            Toast.makeText(context, "اكتملت المعالجة وحُفظ المشروع الحقيقي.", Toast.LENGTH_SHORT).show()
+            onProjectCreated(completedJob.outputProjectId)
+        } else if (completedJob?.status == ProcessingJobEntity.STATUS_FAILED) {
+            isProcessing = false
+            Toast.makeText(context, "فشلت المعالجة: ${completedJob.errorMessage}", Toast.LENGTH_LONG).show()
+        }
+    }
 
     if (showAutoPublishSettingsDialog) {
         AutoPublishSettingsDialog(
@@ -192,6 +213,12 @@ fun VideoUploadScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             selectedVideoUri = uri
             isLoadingMetadata = true
             coroutineScope.launch {
@@ -213,6 +240,12 @@ fun VideoUploadScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
             selectedVideoUri = uri
             isLoadingMetadata = true
             coroutineScope.launch {
@@ -914,28 +947,17 @@ fun VideoUploadScreen(
                                     } catch (_: Exception) {}
                                 }
 
-                                val projectId = repository.processNewVideo(
+                                val jobId = repository.enqueueVideoProcessing(
                                     title = videoTitle,
-                                    sourceUrl = selectedVideoUri.toString(),
+                                    sourceUri = selectedVideoUri.toString(),
                                     transcriptOrPrompt = "Local uploaded video: $videoTitle",
                                     durationMinutes = calcDurationMin,
                                     targetPlatform = appliedLayout,
                                     captionTheme = appliedCaptionTheme
                                 )
-                                isProcessing = false
-                                Toast.makeText(context, "تم استخراج المقاطع بنجاح عبر Gemini AI!", Toast.LENGTH_SHORT).show()
-
-                                if (autoPublishConfig.isEnabled) {
-                                    val publishRes = repository.dispatchAutoPublishForNewProject(projectId, context)
-                                    val bestClip = repository.getBestClipForProject(projectId)
-                                    if (publishRes != null && bestClip != null) {
-                                        autoPublishDialogData = Pair(bestClip, publishRes)
-                                    } else {
-                                        onProjectCreated(projectId)
-                                    }
-                                } else {
-                                    onProjectCreated(projectId)
-                                }
+                                activeProcessingJobId = jobId
+                                isProcessing = true
+                                Toast.makeText(context, "أضيفت المعالجة إلى الطابور وستستمر في الخلفية.", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
                                 isProcessing = false
                                 Toast.makeText(context, "خطأ: ${e.localizedMessage}", Toast.LENGTH_LONG).show()

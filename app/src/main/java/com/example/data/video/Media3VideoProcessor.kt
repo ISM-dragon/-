@@ -1,6 +1,12 @@
 package com.example.data.video
 
 import android.content.Context
+import android.graphics.Color
+import android.text.SpannableString
+import android.text.style.AbsoluteSizeSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
+import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
@@ -10,7 +16,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.Effects
+import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.TextOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.ExportException
@@ -29,6 +37,20 @@ import kotlin.coroutines.suspendCoroutine
  * the deterministic trim/export. This mirrors PublikClip's separation between
  * scoring and rendering without importing its Python/desktop implementation.
  */
+data class CaptionCue(
+    val text: String,
+    val startSec: Float,
+    val endSec: Float,
+    val isHighlight: Boolean = false
+)
+
+enum class ExportAspectRatio(val value: Float) {
+    VERTICAL_9_16(9f / 16f),
+    SQUARE_1_1(1f),
+    PORTRAIT_4_5(4f / 5f),
+    LANDSCAPE_16_9(16f / 9f)
+}
+
 data class SourceVideoMetadata(
     val durationSec: Int,
     val width: Int,
@@ -74,6 +96,9 @@ class Media3VideoProcessor(private val context: Context) {
         startTimeSec: Int,
         endTimeSec: Int,
         vertical: Boolean = true,
+        aspectRatio: ExportAspectRatio = if (vertical) ExportAspectRatio.VERTICAL_9_16 else ExportAspectRatio.LANDSCAPE_16_9,
+        captionCues: List<CaptionCue> = emptyList(),
+        watermarkText: String = "",
         onProgress: (Int) -> Unit = {}
     ): File {
         require(startTimeSec >= 0) { "Clip start time cannot be negative." }
@@ -92,19 +117,21 @@ class Media3VideoProcessor(private val context: Context) {
             .setClippingConfiguration(clipping)
             .build()
 
-        val effects = if (vertical) {
-            Effects(
-                emptyList(),
-                listOf(
-                    Presentation.createForAspectRatio(
-                        9f / 16f,
-                        Presentation.LAYOUT_SCALE_TO_FIT
-                    )
-                )
+        val videoEffects = mutableListOf<androidx.media3.common.Effect>()
+        if (aspectRatio != ExportAspectRatio.LANDSCAPE_16_9 || vertical) {
+            videoEffects += Presentation.createForAspectRatio(
+                aspectRatio.value,
+                Presentation.LAYOUT_SCALE_TO_FIT
             )
-        } else {
-            Effects(emptyList(), emptyList())
         }
+        val overlays = buildList {
+            if (captionCues.isNotEmpty()) add(TimedCaptionOverlay(captionCues))
+            if (watermarkText.isNotBlank()) add(TextOverlay.createStaticTextOverlay(SpannableString(watermarkText)))
+        }
+        if (overlays.isNotEmpty()) {
+            videoEffects += OverlayEffect(overlays)
+        }
+        val effects = Effects(emptyList(), videoEffects)
 
         val editedMediaItem = EditedMediaItem.Builder(mediaItem)
             .setEffects(effects)
@@ -155,6 +182,38 @@ class Media3VideoProcessor(private val context: Context) {
             }
             handler.post(progressRunnable!!)
             transformer.start(editedMediaItem, outputFile.absolutePath)
+        }
+    }
+
+    private class TimedCaptionOverlay(
+        private val cues: List<CaptionCue>
+    ) : TextOverlay() {
+        override fun getText(presentationTimeUs: Long): SpannableString {
+            val timeSec = presentationTimeUs / 1_000_000f
+            val cue = cues.lastOrNull { timeSec >= it.startSec && timeSec <= it.endSec }
+                ?: return SpannableString("")
+            return SpannableString(cue.text).apply {
+                setSpan(
+                    AbsoluteSizeSpan(TEXT_SIZE_PIXELS),
+                    0,
+                    length,
+                    SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                setSpan(
+                    ForegroundColorSpan(Color.YELLOW.takeIf { cue.isHighlight } ?: Color.WHITE),
+                    0,
+                    length,
+                    SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                if (cue.isHighlight) {
+                    setSpan(
+                        StyleSpan(Typeface.BOLD),
+                        0,
+                        length,
+                        SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                }
+            }
         }
     }
 }
