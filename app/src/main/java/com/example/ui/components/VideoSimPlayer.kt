@@ -1,5 +1,8 @@
 package com.example.ui.components
 
+import android.net.Uri
+import java.io.File
+
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -37,6 +40,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -48,7 +52,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +82,52 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.delay
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+
+@Composable
+private fun RealClipPlayer(
+    clip: Clip,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val player = androidx.compose.runtime.remember(clip.exportPath) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(androidx.media3.common.MediaItem.fromUri(Uri.fromFile(File(clip.exportPath))))
+            prepare()
+            playWhenReady = true
+        }
+    }
+    DisposableEffect(player) {
+        onDispose { player.release() }
+    }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("real_video_player_container"),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "المقطع الحقيقي الناتج من Gemini + Media3",
+            color = OpusElectricCyan,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        AndroidView(
+            factory = { viewContext ->
+                PlayerView(viewContext).apply {
+                    this.player = player
+                    useController = true
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(9f / 16f)
+                .clip(RoundedCornerShape(16.dp))
+        )
+    }
+}
 
 @Composable
 fun VideoSimPlayer(
@@ -91,6 +143,11 @@ fun VideoSimPlayer(
     onSeekComplete: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    if (clip.exportPath.isNotBlank() && File(clip.exportPath).exists()) {
+        RealClipPlayer(clip = clip, modifier = modifier)
+        return
+    }
+
     var isPlaying by remember { mutableStateOf(true) }
     var currentPlaybackSec by remember { mutableFloatStateOf(0f) }
     val durationSec = maxOf(15, clip.durationSec).toFloat()
