@@ -1,6 +1,7 @@
 package com.example.data.video
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -28,7 +29,43 @@ import kotlin.coroutines.suspendCoroutine
  * scoring and rendering without importing its Python/desktop implementation.
  */
 @OptIn(UnstableApi::class)
+data class SourceVideoMetadata(
+    val durationSec: Int,
+    val width: Int,
+    val height: Int,
+    val mimeType: String
+)
+
 class Media3VideoProcessor(private val context: Context) {
+
+    fun inspectSource(inputUri: Uri): SourceVideoMetadata? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            if (inputUri.scheme == "content" || inputUri.scheme == "file") {
+                retriever.setDataSource(context, inputUri)
+            } else {
+                retriever.setDataSource(inputUri.toString(), emptyMap())
+            }
+            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: return null
+            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull() ?: 0
+            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull() ?: 0
+            val mimeType = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
+                ?: "video/mp4"
+            SourceVideoMetadata(
+                durationSec = (durationMs / 1_000L).toInt().coerceAtLeast(1),
+                width = width,
+                height = height,
+                mimeType = mimeType
+            )
+        } catch (_: Exception) {
+            null
+        } finally {
+            retriever.release()
+        }
+    }
 
     suspend fun exportClip(
         inputUri: Uri,

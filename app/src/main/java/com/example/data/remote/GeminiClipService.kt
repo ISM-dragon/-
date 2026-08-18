@@ -1122,7 +1122,7 @@ class GeminiClipService(private val context: Context? = null) {
                     httpCode = response.code,
                     endpointUrl = endpointUrl,
                     responseSummary = if (isSuccess) "Direct In-App API Request Succeeded (HTTP ${response.code})" else "API Response: HTTP ${response.code}",
-                    postUrl = if (isSuccess) getSamplePostUrl(platform) else "",
+                    postUrl = if (isSuccess) extractPostUrl(responseBody) else "",
                     rawPayload = responseBody.take(400)
                 )
             } catch (e: Exception) {
@@ -1139,28 +1139,28 @@ class GeminiClipService(private val context: Context? = null) {
             }
         }
 
-        // Native In-App Autonomous Publishing Pipeline
-        kotlinx.coroutines.delay(450) // Native dispatch latency
-        val generatedId = (10000000..99999999).random()
         return@withContext DirectApiPublishLog(
             platform = platform,
-            isSuccess = true,
-            httpCode = 200,
+            isSuccess = false,
+            httpCode = 412,
             endpointUrl = endpointUrl,
-            responseSummary = "Native In-App Dispatch Successful (No External Automation / Handshake Complete)",
-            postUrl = getSamplePostUrl(platform, generatedId.toString()),
-            rawPayload = """{"status": "SUCCESS", "platform": "$platform", "published_id": "$generatedId", "mode": "NATIVE_DIRECT_API"}"""
+            responseSummary = "لم يتم النشر: أضف بيانات API حقيقية للمنصة أولاً.",
+            postUrl = "",
+            rawPayload = "{}"
         )
     }
 
-    private fun getSamplePostUrl(platform: String, id: String = "891238"): String {
-        return when (platform) {
-            "YouTube Shorts" -> "https://youtube.com/shorts/opus_$id"
-            "TikTok" -> "https://tiktok.com/@creator/video/7391$id"
-            "Instagram Reels" -> "https://instagram.com/reel/C_$id"
-            "X (Twitter)" -> "https://x.com/creator/status/1792$id"
-            else -> "https://social.opus.pro/post/$id"
-        }
+    private fun extractPostUrl(responseBody: String): String {
+        return runCatching {
+            val json = JSONObject(responseBody)
+            json.optString("postUrl").ifBlank {
+                json.optString("url").ifBlank {
+                    json.optString("permalink").ifBlank {
+                        json.optString("web_url")
+                    }
+                }
+            }
+        }.getOrDefault("")
     }
 
     suspend fun determineOptimalTemplateAndPreset(

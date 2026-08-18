@@ -656,14 +656,26 @@ class OpusRepository(context: Context) {
         delay(900)
 
         val inputMediaUri = sourceUrl.toMediaUriOrNull()
+        val sourceMetadata = inputMediaUri?.let(videoProcessor::inspectSource)
+        val actualDurationSec = sourceMetadata?.durationSec ?: (durationMinutes * 60)
+        val actualDurationMinutes = ((actualDurationSec + 59) / 60).coerceAtLeast(1)
         val clipsData = geminiService.analyzeAndGenerateClips(
             title = title,
             sourceUrl = sourceUrl,
             transcriptOrPrompt = transcriptOrPrompt,
-            durationMinutes = durationMinutes,
+            durationMinutes = actualDurationMinutes,
             providers = _aiProviders.value,
             videoUri = inputMediaUri?.takeIf { it.scheme == "content" || it.scheme == "file" }
-        )
+        ).asSequence()
+            .filter { clip ->
+                clip.startTimeSec >= 0 &&
+                    clip.endTimeSec > clip.startTimeSec &&
+                    clip.endTimeSec <= actualDurationSec &&
+                    clip.endTimeSec - clip.startTimeSec >= 5
+            }
+            .distinctBy { "${it.startTimeSec}:${it.endTimeSec}" }
+            .take(10)
+            .toList()
         if (clipsData.isEmpty()) {
             _processingStep.value = ProcessingStep.Idle
             throw IllegalStateException(
@@ -672,7 +684,7 @@ class OpusRepository(context: Context) {
         }
 
         // Deduct Google Flow Credits
-        deductGoogleFlowCredits(durationMinutes)
+        deductGoogleFlowCredits(actualDurationMinutes)
 
         _processingStep.value = ProcessingStep.CalculatingScores
         delay(700)
@@ -684,7 +696,7 @@ class OpusRepository(context: Context) {
         val project = Project(
             title = actualTitle,
             sourceUrl = actualUrl,
-            sourceDurationSec = durationMinutes * 60,
+            sourceDurationSec = actualDurationSec,
             status = "COMPLETED",
             targetPlatform = targetPlatform,
             captionTheme = captionTheme,
@@ -750,13 +762,13 @@ class OpusRepository(context: Context) {
         // 1. Cache video processing metadata in Room DB
         val videoCache = VideoProcessingCacheEntity(
             sourceUrl = actualUrl,
-            videoHash = "hash_${newProjectId}_${durationMinutes}",
+            videoHash = "hash_${newProjectId}_${actualDurationSec}",
             videoTitle = actualTitle,
-            sourceDurationSec = durationMinutes * 60,
-            resolution = "1080x1920 (9:16 Vertical HD)",
-            detectedLanguage = if (actualTitle.any { it in '\u0600'..'\u06FF' }) "ar" else "en",
-            speakerCount = 1,
-            audioSummary = "Repurposed high-tension segments analyzed and converted to high-engagement vertical short videos.",
+            sourceDurationSec = actualDurationSec,
+            resolution = sourceMetadata?.let { "${it.width}x${it.height}" } ?: "غير متاح",
+            detectedLanguage = "غير مستخرج",
+            speakerCount = 0,
+            audioSummary = "",
             fullTranscript = transcriptOrPrompt.ifBlank { clipsData.joinToString("\n") { it.transcript } },
             rawAnalysisJson = "{}",
             processingDurationMs = processingDurationMs,
@@ -804,10 +816,10 @@ class OpusRepository(context: Context) {
             actionType = "AI_REPURPOSE_PROCESSED",
             clipsGeneratedCount = clipsData.size,
             highestViralScore = maxScore,
-            estimatedTimeSavedMinutes = durationMinutes * 4,
+            estimatedTimeSavedMinutes = actualDurationMinutes * 4,
             status = "SUCCESS",
             targetPlatform = targetPlatform,
-            details = "Extracted ${clipsData.size} viral shorts with top virality score of ${maxScore}%. Saved ~${durationMinutes * 4} minutes of editing time.",
+            details = "Extracted ${clipsData.size} viral shorts with top virality score of ${maxScore}%. Saved ~${actualDurationMinutes * 4} minutes of editing time.",
             timestamp = System.currentTimeMillis()
         )
         repurposingHistoryDao.insertHistory(historyEntry)
@@ -815,7 +827,7 @@ class OpusRepository(context: Context) {
         // Deduct credits
         val updatedCreditState = _userCreditState.value.copy(
             creditsRemaining = _googleFlowCredits.value.remainingCreditsMinutes,
-            totalProcessedMinutes = _userCreditState.value.totalProcessedMinutes + durationMinutes,
+            totalProcessedMinutes = _userCreditState.value.totalProcessedMinutes + actualDurationMinutes,
             clipsCreatedCount = _userCreditState.value.clipsCreatedCount + clipsData.size
         )
         _userCreditState.value = updatedCreditState
