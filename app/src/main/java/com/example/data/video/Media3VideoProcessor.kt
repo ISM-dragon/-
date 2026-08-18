@@ -5,6 +5,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -28,7 +29,6 @@ import kotlin.coroutines.suspendCoroutine
  * the deterministic trim/export. This mirrors PublikClip's separation between
  * scoring and rendering without importing its Python/desktop implementation.
  */
-@OptIn(UnstableApi::class)
 data class SourceVideoMetadata(
     val durationSec: Int,
     val width: Int,
@@ -36,7 +36,7 @@ data class SourceVideoMetadata(
     val mimeType: String
 )
 
-@OptIn(UnstableApi::class)
+@OptIn(markerClass = [UnstableApi::class])
 class Media3VideoProcessor(private val context: Context) {
 
     fun inspectSource(inputUri: Uri): SourceVideoMetadata? {
