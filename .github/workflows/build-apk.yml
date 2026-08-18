@@ -41,6 +41,11 @@ jobs:
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
+      - name: Run Unit Tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
+
       - name: Build Debug APK
         run: |
           if [ -f "./gradlew" ]; then
