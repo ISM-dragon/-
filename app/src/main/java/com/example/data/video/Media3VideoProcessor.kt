@@ -129,7 +129,7 @@ class Media3VideoProcessor(private val context: Context) {
                 val boundedCenter = cropCenterX.coerceIn(-1f, 1f)
                 val left = (boundedCenter - halfWidth).coerceIn(-1f, 1f - (2f * halfWidth))
                 val right = left + (2f * halfWidth)
-                videoEffects += Crop(left = left, right = right, bottom = -1f, top = 1f)
+                videoEffects += Crop(left, right, -1f, 1f)
             }
         }
         if (aspectRatio != ExportAspectRatio.LANDSCAPE_16_9 || vertical) {
