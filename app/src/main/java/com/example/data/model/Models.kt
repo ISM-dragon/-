@@ -1,0 +1,214 @@
+package com.example.data.model
+
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+import com.squareup.moshi.JsonClass
+
+@Entity(tableName = "projects")
+@JsonClass(generateAdapter = true)
+data class Project(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val title: String,
+    val sourceUrl: String,
+    val sourceDurationSec: Int = 900,
+    val status: String = "COMPLETED", // PROCESSING, COMPLETED, FAILED
+    val targetPlatform: String = "TikTok & Reels (9:16)",
+    val captionTheme: String = "Opus Neon",
+    val clipCount: Int = 0,
+    val bestViralityScore: Int = 0,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "clips")
+@JsonClass(generateAdapter = true)
+data class Clip(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val projectId: Long,
+    val title: String,
+    val startTimeSec: Int,
+    val endTimeSec: Int,
+    val durationSec: Int,
+    val viralityScore: Int, // 0 - 100
+    val hookScore: Int = 90,
+    val retentionScore: Int = 85,
+    val emotionalScore: Int = 80,
+    val shareabilityScore: Int = 88,
+    val punchlineScore: Int = 85,
+    val hookExplanation: String,
+    val transcript: String,
+    val animatedCaptionsJson: String, // serialized List<AnimatedWord>
+    val bRollPromptsJson: String,     // serialized List<BRollIdea>
+    val socialCopyJson: String,       // serialized List<SocialPostCopy>
+    val layoutType: String = "9:16 Full Screen",
+    val isFavorite: Boolean = false,
+    val exportPath: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class AnimatedWord(
+    val word: String,
+    val startSec: Float,
+    val endSec: Float,
+    val isHighlight: Boolean = false,
+    val emoji: String = "",
+    val colorHex: String = "#38BDF8"
+)
+
+@JsonClass(generateAdapter = true)
+data class BRollIdea(
+    val title: String,
+    val timestampSec: Int,
+    val visualPrompt: String,
+    val soundEffect: String = "Swoosh transition"
+)
+
+@JsonClass(generateAdapter = true)
+data class SocialPostCopy(
+    val platform: String, // TikTok, Instagram Reels, YouTube Shorts, LinkedIn, X
+    val caption: String,
+    val hook: String,
+    val hashtags: List<String>
+)
+
+data class ViralityAnalysisResult(
+    val clips: List<ClipGenerationData>
+)
+
+@JsonClass(generateAdapter = true)
+data class ClipGenerationData(
+    val title: String,
+    val startTimeSec: Int,
+    val endTimeSec: Int,
+    val viralityScore: Int,
+    val hookScore: Int,
+    val retentionScore: Int,
+    val emotionalScore: Int,
+    val shareabilityScore: Int,
+    val punchlineScore: Int,
+    val hookExplanation: String,
+    val transcript: String,
+    val keywords: List<String>,
+    val emojis: List<String>,
+    val bRollIdeas: List<BRollIdea>,
+    val socialCopies: List<SocialPostCopy>
+)
+
+@JsonClass(generateAdapter = true)
+data class AutoPublishConfig(
+    val isEnabled: Boolean = false,
+    val targetPlatforms: Set<String> = setOf("TikTok", "YouTube Shorts", "Instagram Reels"),
+    val autoOpenShareSheet: Boolean = true,
+    val autoCopyCaption: Boolean = true,
+    val webhookUrl: String = "",
+    val scheduledSlot: String = "Instant (Immediately after AI generation)"
+)
+
+data class AutoPublishResult(
+    val isSuccess: Boolean,
+    val message: String,
+    val dispatchedPlatforms: List<String>,
+    val webhookDispatched: Boolean = false,
+    val postText: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class DedicatedCaptionResult(
+    val hooks: List<String>,
+    val mainCaption: String,
+    val keyTakeaways: List<String>,
+    val callToAction: String,
+    val hashtags: List<String>,
+    val characterCount: Int,
+    val viralityGrade: String = "A+",
+    val platformTips: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class DirectPlatformApiCredentials(
+    val youtubeApiKey: String = "",
+    val youtubeBearerToken: String = "",
+    val tiktokAccessToken: String = "",
+    val instagramAccessToken: String = "",
+    val instagramAccountId: String = "",
+    val twitterBearerToken: String = "",
+    val isDirectApiEnabled: Boolean = true
+)
+
+@JsonClass(generateAdapter = true)
+data class DirectApiPublishLog(
+    val id: String = System.currentTimeMillis().toString(),
+    val timestamp: Long = System.currentTimeMillis(),
+    val platform: String,
+    val isSuccess: Boolean,
+    val httpCode: Int,
+    val endpointUrl: String,
+    val responseSummary: String,
+    val postUrl: String = "",
+    val rawPayload: String = ""
+)
+
+@JsonClass(generateAdapter = true)
+data class AiTemplateRecommendation(
+    val recommendedCaptionTheme: String = "Opus Neon",
+    val recommendedLayout: String = "9:16 Full Screen",
+    val recommendedPlatform: String = "TikTok & Reels (9:16)",
+    val recommendedDurationRange: String = "30s - 60s",
+    val styleReasoning: String = "High dynamic energy with punchy neon highlights for maximum social retention.",
+    val detectedNiche: String = "General Viral Content",
+    val confidenceScore: Int = 98
+)
+
+@JsonClass(generateAdapter = true)
+data class GoogleFlowCreditInfo(
+    val totalCreditsMinutes: Int = 180, // Default 180 free processing minutes per cycle
+    val usedCreditsMinutes: Int = 35,
+    val totalRequestsLimit: Int = 1500, // 1500 Requests per day free tier
+    val usedRequestsCount: Int = 84,
+    val planName: String = "Google Flow AI Free Tier",
+    val rpmLimit: Int = 15,
+    val isAutoFailoverEnabled: Boolean = true,
+    val activeProviderName: String = "Google Gemini 2.5 Flash",
+    val lastResetTimestamp: Long = System.currentTimeMillis()
+) {
+    val remainingCreditsMinutes: Int
+        get() = (totalCreditsMinutes - usedCreditsMinutes).coerceAtLeast(0)
+
+    val remainingRequestsCount: Int
+        get() = (totalRequestsLimit - usedRequestsCount).coerceAtLeast(0)
+
+    val creditPercentage: Float
+        get() = if (totalCreditsMinutes > 0) {
+            (remainingCreditsMinutes.toFloat() / totalCreditsMinutes.toFloat()).coerceIn(0f, 1f)
+        } else 0f
+
+    val isExhausted: Boolean
+        get() = remainingCreditsMinutes <= 0 || remainingRequestsCount <= 0
+}
+
+enum class AiProviderType(val displayName: String, val defaultModel: String, val placeholderKey: String, val docsUrl: String) {
+    GEMINI("Google Gemini AI", "gemini-2.5-flash", "AIzaSy...", "https://aistudio.google.com/app/apikey"),
+    OPENROUTER("OpenRouter (Multi-LLM)", "meta-llama/llama-3.3-70b-instruct", "sk-or-v1-...", "https://openrouter.ai/keys"),
+    GROQ("Groq (Ultra-Fast)", "llama-3.3-70b-versatile", "gsk_...", "https://console.groq.com/keys"),
+    MISTRAL("Mistral AI", "mistral-large-latest", "...", "https://console.mistral.ai/api-keys/"),
+    OPENAI("OpenAI / Compatible", "gpt-4o-mini", "sk-proj-...", "https://platform.openai.com/api-keys"),
+    CUSTOM("Custom Endpoint", "default", "key_...", "")
+}
+
+@JsonClass(generateAdapter = true)
+data class AiProviderConfig(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String,
+    val providerType: String = AiProviderType.GEMINI.name, // Gemini, OpenRouter, Groq, Mistral, OpenAI, Custom
+    val apiKey: String,
+    val customBaseUrl: String = "",
+    val modelName: String = "gemini-2.5-flash",
+    val priority: Int = 1, // 1 = Primary, 2 = Secondary, 3 = Tertiary...
+    val isEnabled: Boolean = true,
+    val isExhausted: Boolean = false,
+    val lastTestedSuccess: Boolean? = null,
+    val lastTestedMessage: String = ""
+)
+
+

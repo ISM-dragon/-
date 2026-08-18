@@ -1,0 +1,44 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer vertical frame (9:16 aspect symbol) -->
+    <path
+        android:pathData="M37,28 L71,28 A6,6 0 0,1 77,34 L77,74 A6,6 0 0,1 71,80 L37,80 A6,6 0 0,1 31,74 L31,34 A6,6 0 0,1 37,28 Z"
+        android:strokeWidth="3.5"
+        android:strokeColor="#7C3AED"
+        android:fillColor="#00000000" />
+    
+    <!-- Video filmstrip tick marks -->
+    <path
+        android:pathData="M35,36 L39,36 M35,44 L39,44 M35,52 L39,52 M35,60 L39,60 M35,68 L39,68 M35,72 L39,72"
+        android:strokeWidth="1.8"
+        android:strokeColor="#A78BFA" />
+    <path
+        android:pathData="M69,36 L73,36 M69,44 L73,44 M69,52 L73,52 M69,60 L73,60 M69,68 L73,68 M69,72 L73,72"
+        android:strokeWidth="1.8"
+        android:strokeColor="#A78BFA" />
+
+    <!-- Center Play/Cutter Arrow with Electric Cyan Gradient -->
+    <path
+        android:pathData="M48,42 L66,54 L48,66 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="48"
+                android:startY="42"
+                android:endX="66"
+                android:endY="66"
+                android:type="linear">
+                <item android:color="#38BDF8" android:offset="0.0" />
+                <item android:color="#818CF8" android:offset="0.6" />
+                <item android:color="#C084FC" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- AI Sparkle star top right -->
+    <path
+        android:pathData="M72,24 C72,27 75,30 78,30 C75,30 72,33 72,36 C72,33 69,30 66,30 C69,30 72,27 72,24 Z"
+        android:fillColor="#F472B6" />
+</vector>

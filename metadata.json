@@ -1,0 +1,6 @@
+{
+  "name": "Opus Pro AI",
+  "description": "AI-powered 1-click video repurposing, viral short clips generator, auto captions & virality scoring with comprehensive competitor comparison funnel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
