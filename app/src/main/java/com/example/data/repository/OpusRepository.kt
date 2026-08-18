@@ -737,11 +737,13 @@ class OpusRepository(context: Context) {
                 it.isEnabled && it.apiKey.isNotBlank() &&
                     (it.providerType == AiProviderType.OPENAI.name || it.providerType == AiProviderType.GROQ.name)
             }?.apiKey.orEmpty()
-            speechToTextService.transcribe(inputMediaUri, sttKey).getOrElse { throw it }.text
+            if (sttKey.isNotBlank()) {
+                speechToTextService.transcribe(inputMediaUri, sttKey).getOrElse { throw it }.text
+            } else {
+                // Gemini can receive the local video file directly; transcription is optional.
+                ""
+            }
         } else transcriptOrPrompt.trim()
-        if (inputMediaUri != null && effectiveTranscript.isBlank()) {
-            throw IllegalStateException("لا يمكن تحليل فيديو محلي دون transcript فعلي أو مزود Speech-to-Text مفعّل.")
-        }
 
         _processingStep.value = ProcessingStep.ScanningHooks
         val aiClips = geminiService.analyzeAndGenerateClips(

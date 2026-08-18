@@ -7,6 +7,7 @@ import com.example.data.model.Project
 import com.example.data.repository.OpusRepository
 import com.example.data.video.LocalMediaAnalyzer
 import com.example.domain.analysis.AnalysisValidator
+import com.example.domain.analysis.Transcript
 import com.example.domain.analysis.CandidateClipDetector
 import com.example.domain.analysis.ViralityScoreEngine
 import com.example.domain.model.CreatorProfile
@@ -52,7 +53,8 @@ class ProductionVideoPipeline(
         captionStyle: String,
         requestedClipCount: Int = 4,
         creatorProfile: CreatorProfile = CreatorProfile(),
-        jobId: String? = null
+        jobId: String? = null,
+        transcriptOrPrompt: String = ""
     ): Result<List<Clip>> = withContext(Dispatchers.IO) {
         var job = PipelineJob(
             jobId = jobId ?: java.util.UUID.randomUUID().toString(),
@@ -75,36 +77,65 @@ class ProductionVideoPipeline(
             checkCancelled()
 
             job = stage(job, PipelineStageType.AUDIO_EXTRACTION, PipelineStageStatus.PROCESSING, 0f, "فحص مسار الصوت وتحليل PCM")
-            require(media.hasAudioTrack) { "الفيديو لا يحتوي على مسار صوت يمكن تحليله." }
-            job = stage(job, PipelineStageType.AUDIO_EXTRACTION, PipelineStageStatus.COMPLETED, 1f, "تم استخراج ${media.audioSignals.size} إشارة صوتية حقيقية")
+            if (!media.hasAudioTrack && transcriptOrPrompt.isBlank()) {
+                throw IllegalStateException("الفيديو لا يحتوي على صوت ولا يوجد نص بديل لتحليله.")
+            }
+            job = stage(
+                job,
+                PipelineStageType.AUDIO_EXTRACTION,
+                PipelineStageStatus.COMPLETED,
+                1f,
+                if (media.hasAudioTrack) "تم استخراج ${media.audioSignals.size} إشارة صوتية حقيقية" else "لا يوجد صوت؛ سيستخدم Gemini التحليل البصري أو النص المقدم"
+            )
             checkCancelled()
 
-            job = stage(job, PipelineStageType.TRANSCRIPTION, PipelineStageStatus.PROCESSING, 0f, "طلب transcription بكلمات موقوتة")
-            val transcript = repository.transcribeLocalMediaDetailed(project.sourceUrl, creatorProfile.primaryLanguage.takeIf { it.length == 2 })
-                .getOrElse { throw it }
-            require(transcript.text.isNotBlank()) { "أعاد مزود transcription نصًا فارغًا." }
-            job = stage(job, PipelineStageType.TRANSCRIPTION, PipelineStageStatus.COMPLETED, 1f, "اكتمل transcription من ${transcript.provider}؛ wordTimed=${transcript.isWordTimed}")
+            job = stage(job, PipelineStageType.TRANSCRIPTION, PipelineStageStatus.PROCESSING, 0f, "التحقق من مصدر النص قبل التحليل")
+            val transcript = if (transcriptOrPrompt.isBlank()) {
+                repository.transcribeLocalMediaDetailed(project.sourceUrl, creatorProfile.primaryLanguage.takeIf { it.length == 2 })
+                    .getOrElse { throw it }
+            } else {
+                Transcript(
+                    language = creatorProfile.primaryLanguage,
+                    segments = emptyList(),
+                    provider = "user_prompt",
+                    isWordTimed = false
+                )
+            }
+            val analysisText = transcript.text.ifBlank { transcriptOrPrompt.trim() }
+            require(analysisText.isNotBlank()) { "لا يوجد نص أو مزود transcription لتحليل الفيديو." }
+            job = stage(
+                job,
+                PipelineStageType.TRANSCRIPTION,
+                PipelineStageStatus.COMPLETED,
+                1f,
+                if (transcript.isWordTimed) "اكتمل transcription من ${transcript.provider}" else "سيحلل Gemini الفيديو مباشرة؛ لا توجد كلمات زمنية محلية"
+            )
             checkCancelled()
             job = stage(job, PipelineStageType.SILENCE_REMOVAL, PipelineStageStatus.COMPLETED, 1f, "تم الاحتفاظ بحدود الكلام؛ لا حذف صمت دون renderer مخصص")
             job = stage(job, PipelineStageType.SEMANTIC_ANALYSIS, PipelineStageStatus.COMPLETED, 1f, "تم تجهيز النص للتحليل الدلالي")
 
-            job = stage(job, PipelineStageType.CLIP_DETECTION, PipelineStageStatus.PROCESSING, 0f, "بناء Interest Curve واكتشاف candidate windows")
-            val curve = candidateDetector.buildInterestCurve(transcript, media.audioSignals)
-            val candidates = candidateDetector.detect(transcript, curve, requestedClipCount.coerceIn(1, 30))
-            require(candidates.isNotEmpty()) { "لم ينتج التحليل المحلي أي مرشح صالح." }
-            job = stage(job, PipelineStageType.CLIP_DETECTION, PipelineStageStatus.COMPLETED, 1f, "تم اكتشاف ${candidates.size} مرشحًا بحدود جمل")
-            checkCancelled()
+            if (transcript.isWordTimed && transcript.segments.isNotEmpty()) {
+                job = stage(job, PipelineStageType.CLIP_DETECTION, PipelineStageStatus.PROCESSING, 0f, "بناء Interest Curve واكتشاف candidate windows")
+                val curve = candidateDetector.buildInterestCurve(transcript, media.audioSignals)
+                val candidates = candidateDetector.detect(transcript, curve, requestedClipCount.coerceIn(1, 30))
+                require(candidates.isNotEmpty()) { "لم ينتج التحليل المحلي أي مرشح صالح." }
+                job = stage(job, PipelineStageType.CLIP_DETECTION, PipelineStageStatus.COMPLETED, 1f, "تم اكتشاف ${candidates.size} مرشحًا بحدود جمل")
+                checkCancelled()
 
-            job = stage(job, PipelineStageType.VIRALITY_SCORING, PipelineStageStatus.PROCESSING, 0f, "حساب score deterministic قابل للتفسير")
-            val scores = candidates.map { candidate -> ViralityScoreEngine.score(candidate, media.audioSignals) }
-            require(scores.any { it.overall >= 0 })
-            job = stage(job, PipelineStageType.VIRALITY_SCORING, PipelineStageStatus.COMPLETED, 1f, "تم حساب factors والطاقة والثقة دون random score")
+                job = stage(job, PipelineStageType.VIRALITY_SCORING, PipelineStageStatus.PROCESSING, 0f, "حساب score deterministic قابل للتفسير")
+                val scores = candidates.map { candidate -> ViralityScoreEngine.score(candidate, media.audioSignals) }
+                require(scores.any { it.overall >= 0 })
+                job = stage(job, PipelineStageType.VIRALITY_SCORING, PipelineStageStatus.COMPLETED, 1f, "تم حساب factors والطاقة والثقة دون random score")
+            } else {
+                job = stage(job, PipelineStageType.CLIP_DETECTION, PipelineStageStatus.COMPLETED, 1f, "تأجيل اختيار المقاطع إلى Gemini لأن transcription المحلي غير متاح")
+                job = stage(job, PipelineStageType.VIRALITY_SCORING, PipelineStageStatus.COMPLETED, 1f, "سيعيد Gemini بيانات المقاطع والتقييم من الفيديو الفعلي")
+            }
 
             job = stage(job, PipelineStageType.HOOK_GENERATION, PipelineStageStatus.PROCESSING, 0f, "إرسال المرشحين الصالحين إلى مزود AI")
             val newProjectId = repository.processNewVideo(
                 title = project.title,
                 sourceUrl = project.sourceUrl,
-                transcriptOrPrompt = transcript.text,
+                transcriptOrPrompt = analysisText,
                 durationMinutes = ceil(media.metadata.durationSec / 60f).toInt().coerceAtLeast(1),
                 targetPlatform = targetPlatform,
                 captionTheme = captionStyle

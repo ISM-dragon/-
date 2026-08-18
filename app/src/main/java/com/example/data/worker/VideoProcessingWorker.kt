@@ -85,7 +85,8 @@ class VideoProcessingWorker(
                 userNicheHint = "",
                 targetPlatform = targetPlatform,
                 captionStyle = captionTheme,
-                jobId = jobId
+                jobId = jobId,
+                transcriptOrPrompt = transcriptOrPrompt
             )
             if (result.isSuccess) {
                 val projectId = result.getOrNull()?.firstOrNull()?.projectId ?: 0L
