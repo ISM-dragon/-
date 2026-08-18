@@ -18,6 +18,7 @@ import android.provider.MediaStore
 import android.util.Log
 import com.example.data.db.OpusDatabase
 import com.example.data.model.AiProviderConfig
+import com.example.data.model.AiUsageAggregate
 import com.example.data.model.AiUsageEntity
 import com.example.data.model.AiProviderType
 import com.example.data.model.AiTemplateRecommendation
@@ -472,8 +473,35 @@ class OpusRepository(context: Context) {
             )
         }
         when (result) {
-            is com.example.domain.ai.AiExecutionResult.Success -> result.data
-            is com.example.domain.ai.AiExecutionResult.Failure -> "لم يُنفّذ أمر التحرير: ${result.errorMessage}"
+            is com.example.domain.ai.AiExecutionResult.Success -> {
+                recordAiUsage(
+                    AiUsageEntity(
+                        provider = result.providerName,
+                        model = _aiProviders.value.firstOrNull { it.name == result.providerName }?.modelName ?: "configured-model",
+                        requestType = "editing_command",
+                        inputUnits = null,
+                        outputUnits = result.tokensUsed.takeIf { it > 0 },
+                        latencyMs = result.latencyMs,
+                        success = true,
+                        estimatedCostUsd = result.estimatedCostUsd.takeIf { it > 0 },
+                        isEstimate = result.tokensUsed <= 0
+                    )
+                )
+                result.data
+            }
+            is com.example.domain.ai.AiExecutionResult.Failure -> {
+                recordAiUsage(
+                    AiUsageEntity(
+                        provider = result.providerName,
+                        model = _aiProviders.value.firstOrNull { it.name == result.providerName }?.modelName ?: "configured-model",
+                        requestType = "editing_command",
+                        latencyMs = 0,
+                        success = false,
+                        errorMessage = result.errorMessage
+                    )
+                )
+                "لم يُنفّذ أمر التحرير: ${result.errorMessage}"
+            }
         }
     }
 
@@ -708,6 +736,12 @@ class OpusRepository(context: Context) {
 
     fun observePipelineCheckpoints(jobId: String): Flow<List<PipelineCheckpointEntity>> = pipelineCheckpointDao.observeJob(jobId)
     val recentAiUsage: Flow<List<AiUsageEntity>> = aiUsageDao.observeRecent()
+
+    fun observeAiUsageAggregates(since: Long): Flow<List<AiUsageAggregate>> =
+        aiUsageDao.observeAggregatesSince(since)
+
+    fun observeRecentAiUsageAggregates(days: Int = 30): Flow<List<AiUsageAggregate>> =
+        observeAiUsageAggregates(System.currentTimeMillis() - days.coerceAtLeast(1) * 86_400_000L)
 
     suspend fun recordAiUsage(record: AiUsageEntity) = withContext(Dispatchers.IO) {
         aiUsageDao.insert(record)

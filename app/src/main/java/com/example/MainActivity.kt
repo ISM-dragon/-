@@ -34,6 +34,7 @@ import com.example.ui.screens.ClipStudioScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ProjectsScreen
 import com.example.ui.screens.SocialGatewayScreen
+import com.example.ui.screens.UsageDashboardScreen
 import com.example.ui.screens.VideoUploadScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.OpusDarkCanvas
@@ -59,7 +60,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun OpusProApp(repository: OpusRepository) {
     var currentTab by remember { mutableStateOf(OpusNavTab.HOME) }
-    var selectedProjectId by remember { mutableLongStateOf(1L) }
+    var selectedProjectId by remember { mutableLongStateOf(0L) }
     var selectedComparisonClipId by remember { mutableStateOf<Long?>(null) }
     var showUploadScreen by remember { mutableStateOf(false) }
     var showApiKeyDialog by remember { mutableStateOf(false) }
@@ -151,6 +152,9 @@ fun OpusProApp(repository: OpusRepository) {
                                     showApiKeyDialog = true
                                 }
                             )
+                        }
+                        OpusNavTab.DASHBOARD -> {
+                            UsageDashboardScreen(repository = repository)
                         }
                         OpusNavTab.STUDIO -> {
                             ClipStudioScreen(

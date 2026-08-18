@@ -130,6 +130,37 @@ private fun RealClipPlayer(
 }
 
 @Composable
+private fun NoRealExportState(
+    clip: Clip,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(OpusDarkSurface)
+            .border(1.dp, OpusHotPink.copy(alpha = 0.65f), RoundedCornerShape(16.dp))
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "لا توجد معاينة MP4 حقيقية لهذا المقطع",
+            color = OpusHotPink,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "المدة المستخرجة: ${clip.durationSec} ثانية. أعد التصدير بعد اكتمال المعالجة.",
+            color = OpusTextSecondary,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
 fun VideoSimPlayer(
     clip: Clip,
     selectedCaptionTheme: String,
@@ -148,6 +179,10 @@ fun VideoSimPlayer(
         return
     }
 
+    NoRealExportState(clip = clip, modifier = modifier)
+    return
+
+    /* Legacy preview intentionally disabled: only exported MP4 files may be shown. */
     var isPlaying by remember { mutableStateOf(true) }
     var currentPlaybackSec by remember { mutableFloatStateOf(0f) }
     val durationSec = maxOf(15, clip.durationSec).toFloat()

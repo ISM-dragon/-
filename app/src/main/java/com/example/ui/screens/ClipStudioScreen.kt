@@ -106,7 +106,7 @@ fun ClipStudioScreen(
         if (initialProjectId != null && initialProjectId > 0) {
             allClips.filter { it.projectId == initialProjectId }
         } else {
-            allClips
+            emptyList()
         }
     }
 
@@ -186,7 +186,11 @@ fun ClipStudioScreen(
                     )
                 )
                 Text(
-                    text = if (initialProjectId != null && initialProjectId > 0) "اكتملت العملية دون نتائج قابلة للعرض أو ما زالت المهمة قيد التنفيذ." else "Head to Clipper to paste a link and extract viral shorts!",
+                    text = if (initialProjectId != null && initialProjectId > 0) {
+                        "لم يتم إنشاء ملفات مقاطع لهذا المشروع بعد. افحص حالة المعالجة أو أعد التصدير."
+                    } else {
+                        "ارفع فيديو محلياً أولاً لإنشاء مقاطعك الحقيقية."
+                    },
                     style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary),
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
                     textAlign = TextAlign.Center
