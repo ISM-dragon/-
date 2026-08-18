@@ -2,7 +2,8 @@ name: Build and Publish Android APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "**" ]
+    tags: [ "v*" ]
   workflow_dispatch:
 
 permissions:
