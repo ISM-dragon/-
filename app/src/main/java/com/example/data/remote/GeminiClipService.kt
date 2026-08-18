@@ -1073,7 +1073,34 @@ class GeminiClipService(private val context: Context? = null) {
             else -> customApiKey ?: ""
         }
 
-        // If user configured a token, execute real HTTP call
+        if (token.isBlank()) {
+            return@withContext DirectApiPublishLog(
+                platform = platform,
+                isSuccess = false,
+                httpCode = 401,
+                endpointUrl = endpointUrl,
+                responseSummary = "لم يتم النشر: بيانات اعتماد المنصة غير موجودة.",
+                postUrl = "",
+                rawPayload = "{}"
+            )
+        }
+
+        // Video platforms require a real media upload/container flow. This method
+        // intentionally refuses to claim success until an exported file is passed
+        // through the platform-specific upload API.
+        if (platform in setOf("YouTube Shorts", "TikTok", "Instagram Reels")) {
+            return@withContext DirectApiPublishLog(
+                platform = platform,
+                isSuccess = false,
+                httpCode = 501,
+                endpointUrl = endpointUrl,
+                responseSummary = "لم يُنفّذ النشر: يجب رفع ملف الفيديو عبر مسار الرفع الرسمي أولاً.",
+                postUrl = "",
+                rawPayload = "{}"
+            )
+        }
+
+        // Only text-capable platforms reach this request path.
         if (token.isNotBlank()) {
             try {
                 val payloadJson = JSONObject().apply {
@@ -1142,9 +1169,9 @@ class GeminiClipService(private val context: Context? = null) {
         return@withContext DirectApiPublishLog(
             platform = platform,
             isSuccess = false,
-            httpCode = 412,
+            httpCode = 401,
             endpointUrl = endpointUrl,
-            responseSummary = "لم يتم النشر: أضف بيانات API حقيقية للمنصة أولاً.",
+            responseSummary = "لم يتم النشر: بيانات اعتماد المنصة غير موجودة.",
             postUrl = "",
             rawPayload = "{}"
         )
