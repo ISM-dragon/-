@@ -60,7 +60,8 @@ class OpusArchitectureCoreTest {
             providerType = AiProviderType.OPENAI.name,
             apiKey = "sk-test-12345678",
             totalCreditsAllocated = 20.0,
-            usedCredits = 5.0
+            usedCredits = 5.0,
+            isEnabled = true
         )
 
         assertEquals(15.0, provider.remainingCredits, 0.001)
