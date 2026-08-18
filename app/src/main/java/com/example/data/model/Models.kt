@@ -187,20 +187,28 @@ data class GoogleFlowCreditInfo(
         get() = remainingCreditsMinutes <= 0 || remainingRequestsCount <= 0
 }
 
-enum class AiProviderType(val displayName: String, val defaultModel: String, val placeholderKey: String, val docsUrl: String) {
-    GEMINI("Google Gemini AI", "gemini-2.5-flash", "AIzaSy...", "https://aistudio.google.com/app/apikey"),
-    OPENROUTER("OpenRouter (Multi-LLM)", "meta-llama/llama-3.3-70b-instruct", "sk-or-v1-...", "https://openrouter.ai/keys"),
-    GROQ("Groq (Ultra-Fast)", "llama-3.3-70b-versatile", "gsk_...", "https://console.groq.com/keys"),
-    MISTRAL("Mistral AI", "mistral-large-latest", "...", "https://console.mistral.ai/api-keys/"),
-    OPENAI("OpenAI / Compatible", "gpt-4o-mini", "sk-proj-...", "https://platform.openai.com/api-keys"),
-    CUSTOM("Custom Endpoint", "default", "key_...", "")
+enum class AiProviderType(
+    val displayName: String,
+    val defaultModel: String,
+    val placeholderKey: String,
+    val docsUrl: String,
+    val brandColorHex: String = "#8B5CF6",
+    val unitCurrency: String = "$"
+) {
+    GEMINI("Google Gemini AI", "gemini-2.5-flash", "AIzaSy...", "https://aistudio.google.com/app/apikey", "#38BDF8", "Quota"),
+    OPENAI("OpenAI (GPT-4o)", "gpt-4o-mini", "sk-proj-...", "https://platform.openai.com/api-keys", "#10B981", "$"),
+    ANTHROPIC("Anthropic (Claude)", "claude-3-5-sonnet-20241022", "sk-ant-...", "https://console.anthropic.com/settings/keys", "#D97706", "$"),
+    OPENROUTER("OpenRouter (Multi-LLM)", "meta-llama/llama-3.3-70b-instruct", "sk-or-v1-...", "https://openrouter.ai/keys", "#6366F1", "$"),
+    GROQ("Groq (Ultra-Fast)", "llama-3.3-70b-versatile", "gsk_...", "https://console.groq.com/keys", "#F59E0B", "Reqs"),
+    MISTRAL("Mistral AI", "mistral-large-latest", "...", "https://console.mistral.ai/api-keys/", "#EF4444", "$"),
+    CUSTOM("Custom Endpoint", "default", "key_...", "", "#94A3B8", "Units")
 }
 
 @JsonClass(generateAdapter = true)
 data class AiProviderConfig(
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String,
-    val providerType: String = AiProviderType.GEMINI.name, // Gemini, OpenRouter, Groq, Mistral, OpenAI, Custom
+    val providerType: String = AiProviderType.GEMINI.name, // Gemini, OpenAI, Anthropic, OpenRouter, Groq, Mistral, Custom
     val apiKey: String,
     val customBaseUrl: String = "",
     val modelName: String = "gemini-2.5-flash",
@@ -208,7 +216,25 @@ data class AiProviderConfig(
     val isEnabled: Boolean = true,
     val isExhausted: Boolean = false,
     val lastTestedSuccess: Boolean? = null,
-    val lastTestedMessage: String = ""
-)
+    val lastTestedMessage: String = "",
+    val totalCreditsAllocated: Double = 10.0,
+    val usedCredits: Double = 1.45,
+    val creditUnit: String = "$",
+    val totalTokensProcessed: Long = 48500L,
+    val requestsCount: Int = 24,
+    val maxRequestsLimit: Int = 1000,
+    val rateLimitRpm: Int = 60,
+    val lastLatencyMs: Long = 185L,
+    val balanceStatus: String = "Healthy"
+) {
+    val remainingCredits: Double
+        get() = (totalCreditsAllocated - usedCredits).coerceAtLeast(0.0)
+
+    val creditPercentage: Float
+        get() = if (totalCreditsAllocated > 0.0) {
+            ((totalCreditsAllocated - usedCredits) / totalCreditsAllocated).toFloat().coerceIn(0f, 1f)
+        } else 0f
+}
+
 
 

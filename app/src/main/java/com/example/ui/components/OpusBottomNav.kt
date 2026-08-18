@@ -13,7 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.FolderSpecial
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.SlowMotionVideo
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -30,16 +32,19 @@ import com.example.ui.theme.OpusBorder
 import com.example.ui.theme.OpusDarkSurface
 import com.example.ui.theme.OpusElectricCyan
 import com.example.ui.theme.OpusGold
+import com.example.ui.theme.OpusHotPink
 import com.example.ui.theme.OpusPrimaryViolet
 import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
+import com.example.ui.theme.OpusViralEmerald
 import com.example.ui.theme.OpusVioletGlow
 
 enum class OpusNavTab(val label: String, val subtitle: String, val testTag: String) {
     HOME("Google Flow", "AI Clipper", "nav_tab_home"),
     STUDIO("Studio", "Editor & Hooks", "nav_tab_studio"),
     BENCHMARK("VS Benchmark", "Competitors", "nav_tab_benchmark"),
-    PROJECTS("Library", "Saved Clips", "nav_tab_projects")
+    PROJECTS("Library", "Saved Clips", "nav_tab_projects"),
+    SETTINGS("API Hub", "Keys & Usage", "nav_tab_settings")
 }
 
 @Composable
@@ -63,13 +68,13 @@ fun OpusBottomNav(
                 Icon(
                     imageVector = Icons.Default.AutoAwesome,
                     contentDescription = "Google Flow AI",
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             },
             label = {
                 Text(
                     text = OpusNavTab.HOME.label,
-                    fontSize = 10.sp,
+                    fontSize = 9.5.sp,
                     fontWeight = if (currentTab == OpusNavTab.HOME) FontWeight.Bold else FontWeight.Medium
                 )
             },
@@ -90,13 +95,13 @@ fun OpusBottomNav(
                 Icon(
                     imageVector = Icons.Default.SlowMotionVideo,
                     contentDescription = "Clip Studio",
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             },
             label = {
                 Text(
                     text = OpusNavTab.STUDIO.label,
-                    fontSize = 10.sp,
+                    fontSize = 9.5.sp,
                     fontWeight = if (currentTab == OpusNavTab.STUDIO) FontWeight.Bold else FontWeight.Medium
                 )
             },
@@ -117,13 +122,13 @@ fun OpusBottomNav(
                 Icon(
                     imageVector = Icons.Default.CompareArrows,
                     contentDescription = "Side-by-Side Benchmark",
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             },
             label = {
                 Text(
                     text = OpusNavTab.BENCHMARK.label,
-                    fontSize = 10.sp,
+                    fontSize = 9.5.sp,
                     fontWeight = if (currentTab == OpusNavTab.BENCHMARK) FontWeight.Bold else FontWeight.Medium
                 )
             },
@@ -144,13 +149,13 @@ fun OpusBottomNav(
                 Icon(
                     imageVector = Icons.Default.FolderSpecial,
                     contentDescription = "Saved Projects",
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             },
             label = {
                 Text(
                     text = OpusNavTab.PROJECTS.label,
-                    fontSize = 10.sp,
+                    fontSize = 9.5.sp,
                     fontWeight = if (currentTab == OpusNavTab.PROJECTS) FontWeight.Bold else FontWeight.Medium
                 )
             },
@@ -162,6 +167,33 @@ fun OpusBottomNav(
                 unselectedTextColor = OpusTextSecondary
             ),
             modifier = Modifier.testTag(OpusNavTab.PROJECTS.testTag)
+        )
+
+        NavigationBarItem(
+            selected = currentTab == OpusNavTab.SETTINGS,
+            onClick = { onTabSelected(OpusNavTab.SETTINGS) },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Key,
+                    contentDescription = "API Keys & Usage",
+                    modifier = Modifier.size(20.dp)
+                )
+            },
+            label = {
+                Text(
+                    text = OpusNavTab.SETTINGS.label,
+                    fontSize = 9.5.sp,
+                    fontWeight = if (currentTab == OpusNavTab.SETTINGS) FontWeight.Bold else FontWeight.Medium
+                )
+            },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = OpusViralEmerald,
+                selectedTextColor = OpusViralEmerald,
+                indicatorColor = OpusPrimaryViolet.copy(alpha = 0.35f),
+                unselectedIconColor = OpusTextSecondary,
+                unselectedTextColor = OpusTextSecondary
+            ),
+            modifier = Modifier.testTag(OpusNavTab.SETTINGS.testTag)
         )
     }
 }

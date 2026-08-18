@@ -28,6 +28,7 @@ import com.example.ui.components.ApiKeySettingsDialog
 import com.example.ui.components.OpusBottomNav
 import com.example.ui.components.OpusHeader
 import com.example.ui.components.OpusNavTab
+import com.example.ui.screens.ApiManagementSettingsScreen
 import com.example.ui.screens.ClipCompetitorComparisonScreen
 import com.example.ui.screens.ClipStudioScreen
 import com.example.ui.screens.HomeScreen
@@ -176,6 +177,12 @@ fun OpusProApp(repository: OpusRepository) {
                                     selectedProjectId = projectId
                                     currentTab = OpusNavTab.STUDIO
                                 }
+                            )
+                        }
+                        OpusNavTab.SETTINGS -> {
+                            ApiManagementSettingsScreen(
+                                repository = repository,
+                                onBack = { currentTab = OpusNavTab.HOME }
                             )
                         }
                     }

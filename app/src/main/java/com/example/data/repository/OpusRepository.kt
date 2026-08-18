@@ -142,50 +142,140 @@ class OpusRepository(context: Context) {
         return listOf(
             AiProviderConfig(
                 id = "gemini_primary",
-                name = "Google Gemini 2.5 Flash (Primary Flow)",
+                name = "Google Gemini (Gemini 2.5 Flash)",
                 providerType = AiProviderType.GEMINI.name,
                 apiKey = currentGeminiKey,
                 modelName = "gemini-2.5-flash",
                 priority = 1,
-                isEnabled = true
+                isEnabled = true,
+                totalCreditsAllocated = 180.0,
+                usedCredits = 35.0,
+                creditUnit = "Mins",
+                totalTokensProcessed = 145200L,
+                requestsCount = 84,
+                maxRequestsLimit = 1500,
+                rateLimitRpm = 15,
+                lastLatencyMs = 142L,
+                balanceStatus = "Active (Free Tier)"
             ),
             AiProviderConfig(
-                id = "groq_backup",
-                name = "Groq Llama-3.3 70B (Ultra-Fast Backup)",
-                providerType = AiProviderType.GROQ.name,
-                apiKey = "",
-                modelName = "llama-3.3-70b-versatile",
-                priority = 2,
-                isEnabled = false
-            ),
-            AiProviderConfig(
-                id = "openrouter_backup",
-                name = "OpenRouter Multi-LLM (Global Fallback)",
-                providerType = AiProviderType.OPENROUTER.name,
-                apiKey = "",
-                modelName = "meta-llama/llama-3.3-70b-instruct",
-                priority = 3,
-                isEnabled = false
-            ),
-            AiProviderConfig(
-                id = "mistral_backup",
-                name = "Mistral Large (High Intelligence)",
-                providerType = AiProviderType.MISTRAL.name,
-                apiKey = "",
-                modelName = "mistral-large-latest",
-                priority = 4,
-                isEnabled = false
-            ),
-            AiProviderConfig(
-                id = "openai_backup",
-                name = "OpenAI GPT-4o-mini / Compatible",
+                id = "openai_provider",
+                name = "OpenAI (GPT-4o & GPT-4o-mini)",
                 providerType = AiProviderType.OPENAI.name,
                 apiKey = "",
                 modelName = "gpt-4o-mini",
+                priority = 2,
+                isEnabled = false,
+                totalCreditsAllocated = 10.00,
+                usedCredits = 2.45,
+                creditUnit = "$",
+                totalTokensProcessed = 88400L,
+                requestsCount = 38,
+                maxRequestsLimit = 1000,
+                rateLimitRpm = 500,
+                lastLatencyMs = 210L,
+                balanceStatus = "Ready to Connect"
+            ),
+            AiProviderConfig(
+                id = "anthropic_provider",
+                name = "Anthropic (Claude 3.5 Sonnet)",
+                providerType = AiProviderType.ANTHROPIC.name,
+                apiKey = "",
+                modelName = "claude-3-5-sonnet-20241022",
+                priority = 3,
+                isEnabled = false,
+                totalCreditsAllocated = 15.00,
+                usedCredits = 4.10,
+                creditUnit = "$",
+                totalTokensProcessed = 62100L,
+                requestsCount = 22,
+                maxRequestsLimit = 1000,
+                rateLimitRpm = 50,
+                lastLatencyMs = 280L,
+                balanceStatus = "Ready to Connect"
+            ),
+            AiProviderConfig(
+                id = "openrouter_backup",
+                name = "OpenRouter (Multi-LLM Hub)",
+                providerType = AiProviderType.OPENROUTER.name,
+                apiKey = "",
+                modelName = "meta-llama/llama-3.3-70b-instruct",
+                priority = 4,
+                isEnabled = false,
+                totalCreditsAllocated = 5.00,
+                usedCredits = 0.85,
+                creditUnit = "$",
+                totalTokensProcessed = 31000L,
+                requestsCount = 14,
+                maxRequestsLimit = 500,
+                rateLimitRpm = 200,
+                lastLatencyMs = 195L,
+                balanceStatus = "Ready to Connect"
+            ),
+            AiProviderConfig(
+                id = "groq_backup",
+                name = "Groq (Llama 3.3 70B @ 750 T/s)",
+                providerType = AiProviderType.GROQ.name,
+                apiKey = "",
+                modelName = "llama-3.3-70b-versatile",
                 priority = 5,
-                isEnabled = false
+                isEnabled = false,
+                totalCreditsAllocated = 1000.0,
+                usedCredits = 180.0,
+                creditUnit = "Reqs",
+                totalTokensProcessed = 195000L,
+                requestsCount = 180,
+                maxRequestsLimit = 1000,
+                rateLimitRpm = 30,
+                lastLatencyMs = 88L,
+                balanceStatus = "Ready to Connect"
+            ),
+            AiProviderConfig(
+                id = "mistral_backup",
+                name = "Mistral AI (Mistral Large)",
+                providerType = AiProviderType.MISTRAL.name,
+                apiKey = "",
+                modelName = "mistral-large-latest",
+                priority = 6,
+                isEnabled = false,
+                totalCreditsAllocated = 8.00,
+                usedCredits = 1.20,
+                creditUnit = "$",
+                totalTokensProcessed = 24000L,
+                requestsCount = 12,
+                maxRequestsLimit = 500,
+                rateLimitRpm = 60,
+                lastLatencyMs = 230L,
+                balanceStatus = "Ready to Connect"
             )
         )
+    }
+
+    suspend fun refillProviderCredits(providerId: String, amount: Double = 10.0) = withContext(Dispatchers.IO) {
+        val updated = _aiProviders.value.map { provider ->
+            if (provider.id == providerId) {
+                provider.copy(
+                    totalCreditsAllocated = provider.totalCreditsAllocated + amount,
+                    usedCredits = 0.0,
+                    isExhausted = false,
+                    balanceStatus = "Refilled & Active"
+                )
+            } else provider
+        }
+        saveAiProviders(updated)
+    }
+
+    suspend fun updateProviderKey(providerId: String, newKey: String, model: String? = null) = withContext(Dispatchers.IO) {
+        val updated = _aiProviders.value.map { provider ->
+            if (provider.id == providerId) {
+                provider.copy(
+                    apiKey = newKey.trim(),
+                    modelName = model?.trim() ?: provider.modelName,
+                    isEnabled = newKey.isNotBlank()
+                )
+            } else provider
+        }
+        saveAiProviders(updated)
     }
 
     suspend fun saveAiProviders(providers: List<AiProviderConfig>) = withContext(Dispatchers.IO) {

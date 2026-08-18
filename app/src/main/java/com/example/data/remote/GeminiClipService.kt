@@ -78,6 +78,45 @@ class GeminiClipService {
                         Pair(false, errorMsg)
                     }
                 }
+                AiProviderType.ANTHROPIC.name -> {
+                    val modelToUse = provider.modelName.ifBlank { "claude-3-5-sonnet-20241022" }
+                    val requestJson = JSONObject().apply {
+                        put("model", modelToUse)
+                        put("max_tokens", 10)
+                        put("messages", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("role", "user")
+                                put("content", "Respond with 'OK'")
+                            })
+                        })
+                    }
+                    val mediaType = "application/json; charset=utf-8".toMediaType()
+                    val body = requestJson.toString().toRequestBody(mediaType)
+                    val request = Request.Builder()
+                        .url("https://api.anthropic.com/v1/messages")
+                        .post(body)
+                        .addHeader("Content-Type", "application/json")
+                        .addHeader("x-api-key", trimmedKey)
+                        .addHeader("anthropic-version", "2023-06-01")
+                        .build()
+
+                    val startTime = System.currentTimeMillis()
+                    val response = okHttpClient.newCall(request).execute()
+                    val latency = System.currentTimeMillis() - startTime
+                    val responseBody = response.body?.string()
+
+                    if (response.isSuccessful) {
+                        Pair(true, "Successfully connected to Anthropic Claude ($modelToUse) in ${latency}ms! Key active.")
+                    } else {
+                        val errorMsg = try {
+                            val json = JSONObject(responseBody ?: "")
+                            json.optJSONObject("error")?.optString("message") ?: "HTTP ${response.code}"
+                        } catch (e: Exception) {
+                            "HTTP ${response.code}: ${response.message}"
+                        }
+                        Pair(false, errorMsg)
+                    }
+                }
                 else -> {
                     // OpenRouter, Groq, Mistral, OpenAI, Custom
                     val endpointUrl = when (provider.providerType) {
@@ -196,6 +235,42 @@ class GeminiClipService {
                         }
                     } else {
                         Log.w("GeminiClipService", "Gemini provider ${provider.name} failed with code ${response.code}: $responseBody")
+                    }
+                }
+                AiProviderType.ANTHROPIC.name -> {
+                    val modelToUse = provider.modelName.ifBlank { "claude-3-5-sonnet-20241022" }
+                    val requestJson = JSONObject().apply {
+                        put("model", modelToUse)
+                        put("max_tokens", 2048)
+                        put("system", systemPrompt)
+                        put("messages", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("role", "user")
+                                put("content", userContent)
+                            })
+                        })
+                    }
+                    val mediaType = "application/json; charset=utf-8".toMediaType()
+                    val body = requestJson.toString().toRequestBody(mediaType)
+                    val request = Request.Builder()
+                        .url("https://api.anthropic.com/v1/messages")
+                        .post(body)
+                        .addHeader("Content-Type", "application/json")
+                        .addHeader("x-api-key", apiKey)
+                        .addHeader("anthropic-version", "2023-06-01")
+                        .build()
+
+                    val response = okHttpClient.newCall(request).execute()
+                    val responseBody = response.body?.string()
+
+                    if (response.isSuccessful && !responseBody.isNullOrBlank()) {
+                        val json = JSONObject(responseBody)
+                        val contentArr = json.optJSONArray("content")
+                        if (contentArr != null && contentArr.length() > 0) {
+                            return@withContext contentArr.getJSONObject(0).optString("text")
+                        }
+                    } else {
+                        Log.w("GeminiClipService", "Anthropic provider ${provider.name} failed with code ${response.code}: $responseBody")
                     }
                 }
                 else -> {
