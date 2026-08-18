@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import com.example.data.model.AiUsageEntity
 import com.example.data.model.Clip
 import com.example.data.model.Project
-import com.example.data.model.PipelineCheckpointEntity
+import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
@@ -20,9 +20,10 @@ import com.example.data.model.ViralScoreMetricEntity
         PipelineCheckpointEntity::class,
         VideoProcessingCacheEntity::class,
         ViralScoreMetricEntity::class,
-        RepurposingHistoryEntity::class
+        RepurposingHistoryEntity::class,
+        ProcessingJobEntity::class
     ],
-    version = 4,
+    version = 3,
     exportSchema = false
 )
 abstract class OpusDatabase : RoomDatabase() {
@@ -33,6 +34,7 @@ abstract class OpusDatabase : RoomDatabase() {
     abstract fun videoProcessingCacheDao(): VideoProcessingCacheDao
     abstract fun viralScoreMetricDao(): ViralScoreMetricDao
     abstract fun repurposingHistoryDao(): RepurposingHistoryDao
+    abstract fun processingJobDao(): ProcessingJobDao
 
     companion object {
         @Volatile

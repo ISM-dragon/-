@@ -20,6 +20,9 @@ interface ClipDao {
     @Query("SELECT * FROM clips WHERE id = :id")
     fun getClipById(id: Long): Flow<Clip?>
 
+    @Query("SELECT * FROM clips WHERE id = :id LIMIT 1")
+    suspend fun getClipByIdSync(id: Long): Clip?
+
     @Query("SELECT * FROM clips WHERE isFavorite = 1 ORDER BY viralityScore DESC")
     fun getFavoriteClips(): Flow<List<Clip>>
 
