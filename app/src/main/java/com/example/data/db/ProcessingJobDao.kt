@@ -15,6 +15,9 @@ interface ProcessingJobDao {
     @Query("SELECT * FROM processing_jobs WHERE jobId = :jobId LIMIT 1")
     fun observe(jobId: String): Flow<ProcessingJobEntity?>
 
+    @Query("SELECT * FROM processing_jobs WHERE jobId = :jobId LIMIT 1")
+    suspend fun get(jobId: String): ProcessingJobEntity?
+
     @Query("SELECT * FROM processing_jobs ORDER BY updatedAt DESC")
     fun observeAll(): Flow<List<ProcessingJobEntity>>
 

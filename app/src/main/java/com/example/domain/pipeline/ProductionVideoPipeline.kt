@@ -29,7 +29,8 @@ import kotlin.math.ceil
  */
 class ProductionVideoPipeline(
     private val repository: OpusRepository,
-    context: Context
+    context: Context,
+    private val onStageChanged: suspend (PipelineJob) -> Unit = {}
 ) {
     private val mediaAnalyzer = LocalMediaAnalyzer(context.applicationContext)
     private val candidateDetector = CandidateClipDetector()
@@ -50,9 +51,14 @@ class ProductionVideoPipeline(
         targetPlatform: String,
         captionStyle: String,
         requestedClipCount: Int = 4,
-        creatorProfile: CreatorProfile = CreatorProfile()
+        creatorProfile: CreatorProfile = CreatorProfile(),
+        jobId: String? = null
     ): Result<List<Clip>> = withContext(Dispatchers.IO) {
-        var job = PipelineJob(projectId = project.id, overallStatus = PipelineStageStatus.PROCESSING)
+        var job = PipelineJob(
+            jobId = jobId ?: java.util.UUID.randomUUID().toString(),
+            projectId = project.id,
+            overallStatus = PipelineStageStatus.PROCESSING
+        )
         _activeJob.value = job
         try {
             val uri = Uri.parse(project.sourceUrl)
@@ -103,6 +109,8 @@ class ProductionVideoPipeline(
                 targetPlatform = targetPlatform,
                 captionTheme = captionStyle
             )
+            job = job.copy(projectId = newProjectId)
+            onStageChanged(job)
             job = stage(job, PipelineStageType.HOOK_GENERATION, PipelineStageStatus.COMPLETED, 1f, "تم قبول نتيجة AI بعد validation")
             job = stage(job, PipelineStageType.CAPTION_SYNTHESIS, PipelineStageStatus.COMPLETED, 1f, "تم حفظ التوقيتات التي أعادها المزود فقط")
             val reframing = reframingProvider.detectTrajectory(uri).getOrElse { throw it }
@@ -117,10 +125,34 @@ class ProductionVideoPipeline(
 
             val clips = repository.getClipsForProject(newProjectId).first()
             require(clips.isNotEmpty()) { "اكتمل التحليل دون ملفات مقاطع محفوظة." }
-            _activeJob.value = job.copy(overallStatus = PipelineStageStatus.COMPLETED, overallProgress = 1f, completedAt = System.currentTimeMillis())
+            val completedJob = job.copy(
+                overallStatus = PipelineStageStatus.COMPLETED,
+                overallProgress = 1f,
+                completedAt = System.currentTimeMillis()
+            )
+            repository.savePipelineCheckpoint(
+                jobId = completedJob.jobId,
+                projectId = completedJob.projectId,
+                stage = completedJob.currentStage.name,
+                status = PipelineStageStatus.COMPLETED.name,
+                progress = 1f,
+                message = "اكتمل خط المعالجة الموحد"
+            )
+            _activeJob.value = completedJob
+            onStageChanged(completedJob)
             Result.success(clips)
         } catch (cancelled: CancellationException) {
-            _activeJob.value = job.copy(overallStatus = PipelineStageStatus.CANCELLED, isCancelled = true, errorDetails = cancelled.message)
+            val cancelledJob = job.copy(overallStatus = PipelineStageStatus.CANCELLED, isCancelled = true, errorDetails = cancelled.message)
+            repository.savePipelineCheckpoint(
+                jobId = cancelledJob.jobId,
+                projectId = cancelledJob.projectId,
+                stage = cancelledJob.currentStage.name,
+                status = PipelineStageStatus.CANCELLED.name,
+                progress = cancelledJob.overallProgress,
+                message = "تم إلغاء خط المعالجة"
+            )
+            _activeJob.value = cancelledJob
+            onStageChanged(cancelledJob)
             Result.failure(cancelled)
         } catch (error: Exception) {
             val message = error.localizedMessage ?: error.javaClass.simpleName
@@ -133,7 +165,9 @@ class ProductionVideoPipeline(
                 message = "فشلت المرحلة الحالية",
                 errorMessage = message
             )
-            _activeJob.value = job.copy(overallStatus = PipelineStageStatus.FAILED, errorDetails = message)
+            val failedJob = job.copy(overallStatus = PipelineStageStatus.FAILED, errorDetails = message)
+            _activeJob.value = failedJob
+            onStageChanged(failedJob)
             Result.failure(error)
         }
     }
@@ -158,6 +192,7 @@ class ProductionVideoPipeline(
             message = message
         )
         _activeJob.value = updated
+        onStageChanged(updated)
         return updated
     }
 }
