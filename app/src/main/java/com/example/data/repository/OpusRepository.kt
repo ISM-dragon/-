@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.ContentValues
 import android.net.Uri
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
@@ -11,7 +12,9 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import com.example.data.db.OpusDatabase
 import com.example.data.model.AiProviderConfig
@@ -1026,6 +1029,33 @@ class OpusRepository(context: Context) {
         )
         clipDao.updateExportPath(clip.id, output.absolutePath)
         output
+    }
+
+    suspend fun saveExportToMediaStore(file: File): Uri = withContext(Dispatchers.IO) {
+        require(file.exists() && file.length() > 0L) { "ملف التصدير غير موجود أو فارغ." }
+        val resolver = appContext.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, file.name)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Opus Pro")
+                put(MediaStore.Video.Media.IS_PENDING, 1)
+            }
+        }
+        val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val uri = resolver.insert(collection, values) ?: error("تعذر إنشاء ملف الفيديو في المعرض.")
+        try {
+            resolver.openOutputStream(uri)?.use { output ->
+                file.inputStream().use { input -> input.copyTo(output) }
+            } ?: error("تعذر فتح ملف الفيديو للكتابة.")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                resolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+            }
+            uri
+        } catch (error: Exception) {
+            resolver.delete(uri, null, null)
+            throw error
+        }
     }
 
     suspend fun toggleFavorite(clipId: Long, currentVal: Boolean) = withContext(Dispatchers.IO) {

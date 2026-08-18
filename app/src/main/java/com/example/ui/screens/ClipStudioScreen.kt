@@ -682,11 +682,12 @@ fun ClipStudioScreen(
                                     aspectRatioName = selectedLayout,
                                     onProgress = { progress -> exportProgress = progress }
                                 )
+                                val galleryUri = repository.saveExportToMediaStore(output)
                                 isExporting = false
                                 showExportModal = false
                                 Toast.makeText(
                                     context,
-                                    "اكتمل التصدير الحقيقي: ${output.name}",
+                                    "اكتمل التصدير وحُفظ في المعرض: $galleryUri",
                                     Toast.LENGTH_LONG
                                 ).show()
                             } catch (error: Exception) {
