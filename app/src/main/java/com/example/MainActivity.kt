@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun OpusProApp(repository: OpusRepository) {
     var currentTab by remember { mutableStateOf(OpusNavTab.HOME) }
-    var selectedProjectId by remember { mutableLongStateOf(1L) }
+    var selectedProjectId by remember { mutableLongStateOf(0L) }
     var selectedComparisonClipId by remember { mutableStateOf<Long?>(null) }
     var showUploadScreen by remember { mutableStateOf(false) }
     var showApiKeyDialog by remember { mutableStateOf(false) }
