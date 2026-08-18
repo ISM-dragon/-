@@ -49,4 +49,7 @@ interface ClipDao {
 
     @Query("UPDATE clips SET animatedCaptionsJson = :captionsJson, transcript = :transcript WHERE id = :clipId")
     suspend fun updateCaptions(clipId: Long, captionsJson: String, transcript: String)
+
+    @Query("UPDATE clips SET exportPath = :exportPath WHERE id = :clipId")
+    suspend fun updateExportPath(clipId: Long, exportPath: String)
 }

@@ -1,5 +1,7 @@
 package com.example.data.remote
 
+import android.content.Context
+import android.net.Uri
 import android.util.Log
 import com.example.BuildConfig
 import com.example.data.model.AiProviderConfig
@@ -22,9 +24,11 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import okio.BufferedSink
+import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
-class GeminiClipService {
+class GeminiClipService(private val context: Context? = null) {
 
     private val moshi = Moshi.Builder()
         .addLast(KotlinJsonAdapterFactory())
@@ -193,7 +197,8 @@ class GeminiClipService {
     private suspend fun executeAiRequestWithProvider(
         provider: AiProviderConfig,
         systemPrompt: String,
-        userContent: String
+        userContent: String,
+        videoUri: Uri? = null
     ): String? = withContext(Dispatchers.IO) {
         val apiKey = provider.apiKey.trim()
         if (apiKey.isBlank()) return@withContext null
@@ -201,17 +206,29 @@ class GeminiClipService {
         try {
             when (provider.providerType) {
                 AiProviderType.GEMINI.name -> {
+                    val videoRef = videoUri?.let { uploadVideoForAnalysis(it, apiKey) }
+                    if (videoUri != null && videoRef == null) {
+                        Log.w("GeminiClipService", "Video could not be uploaded to Gemini File API")
+                        return@withContext null
+                    }
+                    val parts = JSONArray()
+                    videoRef?.let { (fileUri, mimeType) ->
+                        parts.put(
+                            JSONObject().put(
+                                "file_data",
+                                JSONObject()
+                                    .put("mime_type", mimeType)
+                                    .put("file_uri", fileUri)
+                            )
+                        )
+                    }
+                    parts.put(JSONObject().put("text", "$systemPrompt\n\n$userContent\n\nReturn timestamps based on the actual video."))
                     val requestJson = JSONObject().apply {
-                        put("contents", JSONArray().apply {
-                            put(JSONObject().apply {
-                                put("parts", JSONArray().apply {
-                                    put(JSONObject().put("text", "$systemPrompt\n\n$userContent"))
-                                })
-                            })
-                        })
+                        put("contents", JSONArray().put(JSONObject().put("parts", parts)))
                         put("generationConfig", JSONObject().apply {
                             put("temperature", 0.3)
                             put("topP", 0.9)
+                            put("responseMimeType", "application/json")
                         })
                     }
                     val modelToUse = provider.modelName.ifBlank { "gemini-2.5-flash" }
@@ -221,17 +238,15 @@ class GeminiClipService {
                         .url("https://generativelanguage.googleapis.com/v1beta/models/$modelToUse:generateContent?key=$apiKey")
                         .post(body)
                         .build()
-
                     val response = okHttpClient.newCall(request).execute()
                     val responseBody = response.body?.string()
-
                     if (response.isSuccessful && !responseBody.isNullOrBlank()) {
                         val json = JSONObject(responseBody)
                         val candidates = json.optJSONArray("candidates")
                         if (candidates != null && candidates.length() > 0) {
                             val content = candidates.getJSONObject(0).optJSONObject("content")
-                            val parts = content?.optJSONArray("parts")
-                            return@withContext parts?.getJSONObject(0)?.optString("text")
+                            val partsResponse = content?.optJSONArray("parts")
+                            return@withContext partsResponse?.getJSONObject(0)?.optString("text")
                         }
                     } else {
                         Log.w("GeminiClipService", "Gemini provider ${provider.name} failed with code ${response.code}: $responseBody")
@@ -341,12 +356,85 @@ class GeminiClipService {
     }
 
 
+    private fun uploadVideoForAnalysis(uri: Uri, apiKey: String): Pair<String, String>? {
+        val resolver = context?.contentResolver ?: return null
+        val mimeType = resolver.getType(uri) ?: "video/mp4"
+        val contentLength = resolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+        if (contentLength <= 0L) return null
+
+        return try {
+            val startBody = JSONObject()
+                .put("file", JSONObject().put("display_name", "opus_pro_${System.currentTimeMillis()}"))
+                .toString()
+                .toRequestBody("application/json; charset=utf-8".toMediaType())
+            val startRequest = Request.Builder()
+                .url("https://generativelanguage.googleapis.com/upload/v1beta/files?key=$apiKey")
+                .addHeader("X-Goog-Upload-Protocol", "resumable")
+                .addHeader("X-Goog-Upload-Command", "start")
+                .addHeader("X-Goog-Upload-Header-Content-Length", contentLength.toString())
+                .addHeader("X-Goog-Upload-Header-Content-Type", mimeType)
+                .post(startBody)
+                .build()
+            val startResponse = okHttpClient.newCall(startRequest).execute()
+            if (!startResponse.isSuccessful) return null
+            val uploadUrl = startResponse.header("X-Goog-Upload-URL") ?: return null
+
+            val uploadBody = object : okhttp3.RequestBody() {
+                override fun contentType() = mimeType.toMediaType()
+                override fun contentLength() = contentLength
+                override fun writeTo(sink: BufferedSink) {
+                    resolver.openInputStream(uri)?.use { input: InputStream ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            sink.write(buffer, 0, read)
+                        }
+                    } ?: error("Unable to open video Uri")
+                }
+            }
+            val uploadRequest = Request.Builder()
+                .url(uploadUrl)
+                .addHeader("X-Goog-Upload-Offset", "0")
+                .addHeader("X-Goog-Upload-Command", "upload, finalize")
+                .post(uploadBody)
+                .build()
+            val uploadResponse = okHttpClient.newCall(uploadRequest).execute()
+            if (!uploadResponse.isSuccessful) return null
+            val uploadJson = JSONObject(uploadResponse.body?.string().orEmpty())
+            val uploadedFile = uploadJson.optJSONObject("file") ?: return null
+            val fileName = uploadedFile.optString("name").takeIf { it.isNotBlank() } ?: return null
+            val fileUri = uploadedFile.optString("uri").takeIf { it.isNotBlank() } ?: return null
+
+            repeat(60) {
+                val stateRequest = Request.Builder()
+                    .url("https://generativelanguage.googleapis.com/v1beta/$fileName?key=$apiKey")
+                    .get()
+                    .build()
+                val stateResponse = okHttpClient.newCall(stateRequest).execute()
+                if (stateResponse.isSuccessful) {
+                    val stateFile = JSONObject(stateResponse.body?.string().orEmpty())
+                    when (stateFile.optString("state")) {
+                        "ACTIVE" -> return fileUri to mimeType
+                        "FAILED" -> return null
+                    }
+                }
+                Thread.sleep(1_000L)
+            }
+            null
+        } catch (error: Exception) {
+            Log.e("GeminiClipService", "Gemini video upload failed", error)
+            null
+        }
+    }
+
     suspend fun analyzeAndGenerateClips(
         title: String,
         sourceUrl: String,
         transcriptOrPrompt: String,
         durationMinutes: Int,
-        providers: List<AiProviderConfig> = emptyList()
+        providers: List<AiProviderConfig> = emptyList(),
+        videoUri: Uri? = null
     ): List<ClipGenerationData> = withContext(Dispatchers.IO) {
         val systemPrompt = """
             You are Opus Pro (OpusClip) AI Video Repurposing Engine.
@@ -391,7 +479,7 @@ class GeminiClipService {
         if (activeProviders.isNotEmpty()) {
             for (provider in activeProviders) {
                 try {
-                    val rawResponse = executeAiRequestWithProvider(provider, systemPrompt, userContent)
+                    val rawResponse = executeAiRequestWithProvider(provider, systemPrompt, userContent, videoUri)
                     if (!rawResponse.isNullOrBlank()) {
                         val cleanedText = rawResponse.trim()
                             .removePrefix("```json")
@@ -424,7 +512,7 @@ class GeminiClipService {
                     providerType = AiProviderType.GEMINI.name,
                     apiKey = apiKey
                 )
-                val rawResponse = executeAiRequestWithProvider(primaryConfig, systemPrompt, userContent)
+                val rawResponse = executeAiRequestWithProvider(primaryConfig, systemPrompt, userContent, videoUri)
                 if (!rawResponse.isNullOrBlank()) {
                     val cleanedText = rawResponse.trim()
                         .removePrefix("```json")
@@ -507,33 +595,21 @@ class GeminiClipService {
 
                 result.add(
                     ClipGenerationData(
-                        title = obj.optString("title", "Viral Clip #${i + 1}"),
-                        startTimeSec = obj.optInt("startTimeSec", i * 45),
-                        endTimeSec = obj.optInt("endTimeSec", (i + 1) * 45),
-                        viralityScore = obj.optInt("viralityScore", 92 - (i * 3)),
-                        hookScore = obj.optInt("hookScore", 95),
-                        retentionScore = obj.optInt("retentionScore", 90),
-                        emotionalScore = obj.optInt("emotionalScore", 85),
-                        shareabilityScore = obj.optInt("shareabilityScore", 88),
-                        punchlineScore = obj.optInt("punchlineScore", 86),
-                        hookExplanation = obj.optString("hookExplanation", "Strong counter-intuitive statement in the first 3 seconds triggers immediate retention."),
-                        transcript = obj.optString("transcript", "The secret to scaling isn't working harder. It's eliminating bottlenecks before they happen."),
-                        keywords = keywordsList.ifEmpty { listOf("secret", "scaling", "bottlenecks", "scaling") },
-                        emojis = emojisList.ifEmpty { listOf("🔥", "💡", "🚀") },
-                        bRollIdeas = bRollList.ifEmpty {
-                            listOf(
-                                BRollIdea("Productivity Graph Spike", 4, "High-tech 3D chart trending exponentially upwards", "Pop sound"),
-                                BRollIdea("Focused Founder Montage", 18, "Close up of founder making quick strategic decisions", "Whoosh")
-                            )
-                        },
-                        socialCopies = socialList.ifEmpty {
-                            listOf(
-                                SocialPostCopy("TikTok", "Most people get this completely backwards 🤯 Watch before starting your next venture.", "The 1 fatal mistake every founder makes", listOf("#entrepreneur", "#businessgrowth", "#opusclip", "#viral")),
-                                SocialPostCopy("Instagram Reels", "Save this for your next strategy session. 📌 The fastest way to unlock 10x output.", "How top 1% creators work", listOf("#creatoreconomy", "#productivityhacks", "#scale")),
-                                SocialPostCopy("YouTube Shorts", "Stop doing this in 2026! 🚀 The #1 bottleneck revealed.", "The truth about scale", listOf("#shorts", "#business", "#growth")),
-                                SocialPostCopy("LinkedIn", "A powerful insight on operational leverage from our latest session.", "Operational Leverage in High-Growth Companies", listOf("#leadership", "#strategy", "#scaleup"))
-                            )
-                        }
+                        title = obj.optString("title").takeIf { it.isNotBlank() } ?: "Clip ${i + 1}",
+                        startTimeSec = obj.optInt("startTimeSec", -1),
+                        endTimeSec = obj.optInt("endTimeSec", -1),
+                        viralityScore = obj.optInt("viralityScore", 0),
+                        hookScore = obj.optInt("hookScore", 0),
+                        retentionScore = obj.optInt("retentionScore", 0),
+                        emotionalScore = obj.optInt("emotionalScore", 0),
+                        shareabilityScore = obj.optInt("shareabilityScore", 0),
+                        punchlineScore = obj.optInt("punchlineScore", 0),
+                        hookExplanation = obj.optString("hookExplanation"),
+                        transcript = obj.optString("transcript"),
+                        keywords = keywordsList,
+                        emojis = emojisList,
+                        bRollIdeas = bRollList,
+                        socialCopies = socialList
                     )
                 )
             }
@@ -543,202 +619,14 @@ class GeminiClipService {
         return result
     }
 
+    /**
+     * No synthetic clips are generated here. A clip is only accepted when the
+     * configured provider returns valid timestamps and analysis data.
+     */
     fun generatePrecomputedRealisticClips(
         title: String,
         transcriptOrPrompt: String
-    ): List<ClipGenerationData> {
-        val topicLower = (title + " " + transcriptOrPrompt).lowercase()
-
-        return when {
-            topicLower.contains("podcast") || topicLower.contains("interview") || topicLower.contains("rogan") || topicLower.contains("huberman") -> {
-                listOf(
-                    ClipGenerationData(
-                        title = "The 3-Minute Morning Protocol That Changes Focus",
-                        startTimeSec = 14,
-                        endTimeSec = 58,
-                        viralityScore = 98,
-                        hookScore = 99,
-                        retentionScore = 96,
-                        emotionalScore = 94,
-                        shareabilityScore = 97,
-                        punchlineScore = 95,
-                        hookExplanation = "Opens with an intriguing medical fact that challenges conventional wisdom within the first 2 seconds, creating immediate curiosity gap.",
-                        transcript = "If you look at the neurochemistry of peak performance, viewing natural sunlight within 30 minutes of waking triggers a 50% spike in natural dopamine. Most people drink coffee first, which actually delays cortisol clearance and leads to the afternoon crash.",
-                        keywords = listOf("neurochemistry", "dopamine", "sunlight", "afternoon crash", "performance"),
-                        emojis = listOf("⚡", "🧠", "☀️", "☕"),
-                        bRollIdeas = listOf(
-                            BRollIdea("Brain Synapse Neural Glow", 5, "Glowing neon neural pathway synapses firing in high definition", "Deep bass boom"),
-                            BRollIdea("Morning Sunrise Timelapse", 19, "Golden hour sun rays filtering through urban windows", "Gentle riser")
-                        ),
-                        socialCopies = listOf(
-                            SocialPostCopy("TikTok", "Fix your energy forever in 30 seconds ☀️ Try this tomorrow morning!", "Stop drinking coffee first thing in the morning!", listOf("#huberman", "#neuroscience", "#dopamine", "#morningroutine", "#opusclip")),
-                            SocialPostCopy("Instagram Reels", "The science-backed morning protocol you need to know. 🧠 Save this reel.", "How to double your focus naturally", listOf("#biohacking", "#healthylifestyle", "#productivity", "#mindset")),
-                            SocialPostCopy("YouTube Shorts", "The real reason you crash at 2 PM! 😱", "Why your morning coffee is ruining your energy", listOf("#shorts", "#health", "#focus")),
-                            SocialPostCopy("LinkedIn", "Neuroscience insights on optimizing cognitive stamina and daily circadian biology.", "Optimizing Executive Focus Through Circadian Biology", listOf("#productivity", "#performance", "#wellness", "#leadership"))
-                        )
-                    ),
-                    ClipGenerationData(
-                        title = "Why 99% Of People Fail at Cold Showers",
-                        startTimeSec = 142,
-                        endTimeSec = 194,
-                        viralityScore = 94,
-                        hookScore = 96,
-                        retentionScore = 93,
-                        emotionalScore = 91,
-                        shareabilityScore = 93,
-                        punchlineScore = 92,
-                        hookExplanation = "Provocative contrarian opener that points out a widespread mistake, hooking viewers emotionally.",
-                        transcript = "The mistake is trying to fight the cold. When you tense up, your sympathetic nervous system spikes adrenaline. The real skill is slowing your exhale down to 6 seconds while shivering. That is where mental resilience is forged.",
-                        keywords = listOf("mistake", "adrenaline", "exhale", "resilience", "mental"),
-                        emojis = listOf("❄️", "🧊", "🫁", "💪"),
-                        bRollIdeas = listOf(
-                            BRollIdea("Ice Cold Plunge Splash", 4, "Slow motion crystal clear icy water splashing in 4K", "Crisp splash sound"),
-                            BRollIdea("Heart Rate Monitor Graphic", 22, "Futuristic biometrics display calming down in real-time", "Heartbeat pulse")
-                        ),
-                        socialCopies = listOf(
-                            SocialPostCopy("TikTok", "Are you doing cold plunges wrong? 🥶 Watch this before your next plunge!", "The mistake everyone makes with cold exposure", listOf("#coldplunge", "#wimhof", "#mentalhealth", "#discipline")),
-                            SocialPostCopy("Instagram Reels", "Control your breath, control your life. 🧊 Send this to your gym buddy.", "The secret to cold exposure resilience", listOf("#fitnessmotivation", "#breathwork", "#resilience")),
-                            SocialPostCopy("YouTube Shorts", "How to survive ice baths like a pro! ❄️", "Master your nervous system in seconds", listOf("#shorts", "#icebath", "#wellness")),
-                            SocialPostCopy("LinkedIn", "Stress inoculation and high-pressure composure techniques from physiological research.", "Stress Management Lessons from Cold Thermogenesis", listOf("#mentalhealth", "#resilience", "#highperformance"))
-                        )
-                    ),
-                    ClipGenerationData(
-                        title = "The $0 Hack for Instant Deep Sleep",
-                        startTimeSec = 310,
-                        endTimeSec = 362,
-                        viralityScore = 91,
-                        hookScore = 93,
-                        retentionScore = 91,
-                        emotionalScore = 88,
-                        shareabilityScore = 92,
-                        punchlineScore = 89,
-                        hookExplanation = "Promises high-value outcome ($0 deep sleep) with zero financial cost, creating high save-and-share propensity.",
-                        transcript = "Drop your room temperature to 66 degrees Fahrenheit and wear warm socks. Your core body temperature needs to drop by 2 degrees to initiate melatonin release. It costs zero dollars and beats any sleeping pill.",
-                        keywords = listOf("temperature", "melatonin", "deep sleep", "zero dollars"),
-                        emojis = listOf("🌙", "😴", "🌡️", "💤"),
-                        bRollIdeas = listOf(
-                            BRollIdea("Smart Thermostat Dialing Down", 3, "Modern sleek minimalist thermostat glowing at 66°F", "Digital click"),
-                            BRollIdea("REM Sleep Brainwave Waveform", 20, "Smooth relaxing wave graphic flowing peacefully", "Ambient hum")
-                        ),
-                        socialCopies = listOf(
-                            SocialPostCopy("TikTok", "Try this tonight and thank me tomorrow morning 😴", "The temperature hack for 10x better sleep", listOf("#sleephack", "#biohack", "#insomnia", "#health")),
-                            SocialPostCopy("Instagram Reels", "Better sleep = better everything. 🌙 Share with someone who sleeps poorly!", "The $0 Sleep Hack", listOf("#sleepbetter", "#recovery", "#optimalhealth")),
-                            SocialPostCopy("YouTube Shorts", "The #1 thing ruining your sleep right now!", "Why your bedroom is too hot for deep sleep", listOf("#shorts", "#sleep", "#wellness")),
-                            SocialPostCopy("LinkedIn", "Sleep architecture optimization for cognitive restoration and executive energy.", "The Physiological Basis of Deep Rest and Recovery", listOf("#executivehealth", "#productivity", "#wellness"))
-                        )
-                    )
-                )
-            }
-            topicLower.contains("business") || topicLower.contains("saas") || topicLower.contains("marketing") || topicLower.contains("scaling") || topicLower.contains("money") -> {
-                listOf(
-                    ClipGenerationData(
-                        title = "How to Price Your Product 10x Higher Without Losing Customers",
-                        startTimeSec = 30,
-                        endTimeSec = 82,
-                        viralityScore = 97,
-                        hookScore = 98,
-                        retentionScore = 95,
-                        emotionalScore = 92,
-                        shareabilityScore = 96,
-                        punchlineScore = 94,
-                        hookExplanation = "Directly addresses founders' primary anxiety (losing clients) with an audacious value proposition (10x price increase).",
-                        transcript = "If you charge $100, clients treat you like a vendor. When you charge $10,000, they treat you like an investment partner. The difference is not your product—it is the risk reversal and the speed of the transformation you guarantee.",
-                        keywords = listOf("charge", "vendor", "investment partner", "risk reversal", "transformation"),
-                        emojis = listOf("💰", "📈", "🤝", "🚀"),
-                        bRollIdeas = listOf(
-                            BRollIdea("High Value Contract Signing", 6, "Macro shot of fountain pen signing a premium agreement", "Paper rustle"),
-                            BRollIdea("Stripe Revenue Dashboard Surging", 24, "Glowing neon green revenue charts multiplying", "Cash register chime")
-                        ),
-                        socialCopies = listOf(
-                            SocialPostCopy("TikTok", "Stop undercharging for your skills! 💸 Watch this before sending your next proposal.", "Why cheap prices kill your business", listOf("#entrepreneurship", "#pricingstrategy", "#freelancer", "#businesstips")),
-                            SocialPostCopy("Instagram Reels", "The mindset shift that took our agency from 5k to 100k months. 📊 Save this.", "How to charge premium rates with confidence", listOf("#agencyowner", "#digitalmarketing", "#scaleup")),
-                            SocialPostCopy("YouTube Shorts", "Charge 10x more starting today! 🚀", "The psychology of high-ticket sales", listOf("#shorts", "#money", "#business")),
-                            SocialPostCopy("LinkedIn", "Strategic reflections on value-based pricing models and client perceived ROI.", "The Mathematics of Value-Based Pricing in B2B", listOf("#pricingstrategy", "#salesstrategy", "#b2b", "#growth"))
-                        )
-                    ),
-                    ClipGenerationData(
-                        title = "The 1 Content Flywheel That Built a $50M Brand",
-                        startTimeSec = 110,
-                        endTimeSec = 168,
-                        viralityScore = 93,
-                        hookScore = 95,
-                        retentionScore = 92,
-                        emotionalScore = 90,
-                        shareabilityScore = 94,
-                        punchlineScore = 91,
-                        hookExplanation = "Provides a tangible blueprint with real authority metrics ($50M proof point).",
-                        transcript = "Record 1 long-form podcast a week. Use AI tools like Opus Pro to slice it into 20 high-retention shorts. Post across TikTok, YouTube Shorts, and Reels. You get 500,000 organic impressions weekly for virtually zero ad spend.",
-                        keywords = listOf("podcast", "AI tools", "Opus Pro", "impressions", "organic"),
-                        emojis = listOf("🎙️", "🤖", "🔥", "📱"),
-                        bRollIdeas = listOf(
-                            BRollIdea("Podcast Studio Setup", 4, "Professional Shure SM7B mic in dark moody neon studio", "Studio ambience"),
-                            BRollIdea("Viral Social Media Feed", 20, "Fast vertical feed bursting with likes and shares", "Notification pops")
-                        ),
-                        socialCopies = listOf(
-                            SocialPostCopy("TikTok", "This exact content system gets 500k views per week effortlessly 🚀", "The $0 organic marketing strategy", listOf("#contentcreator", "#opuspro", "#marketinghacks", "#growthentrepreneur")),
-                            SocialPostCopy("Instagram Reels", "How top brands turn 1 video into 30 pieces of viral content. 📲", "The Multi-Platform Repurposing Flywheel", listOf("#socialmediamarketing", "#contentstrategy", "#reelsgrowth")),
-                            SocialPostCopy("YouTube Shorts", "Get 500k views with zero ad budget! 📈", "The AI video repurposing formula", listOf("#shorts", "#marketing", "#creator")),
-                            SocialPostCopy("LinkedIn", "A breakdown of scalable content distribution pipelines for modern B2B brand building.", "Building a Multi-Channel Content Engine With Generative AI", listOf("#contentmarketing", "#digitalstrategy", "#marketingleadership"))
-                        )
-                    )
-                )
-            }
-            else -> {
-                listOf(
-                    ClipGenerationData(
-                        title = "The Counter-Intuitive Truth That Changes Everything",
-                        startTimeSec = 5,
-                        endTimeSec = 48,
-                        viralityScore = 96,
-                        hookScore = 98,
-                        retentionScore = 94,
-                        emotionalScore = 93,
-                        shareabilityScore = 95,
-                        punchlineScore = 93,
-                        hookExplanation = "Instantly breaks expectations with a polarizing opening line that forces viewers to stop scrolling.",
-                        transcript = "The biggest misconception is that success requires non-stop hustle. The real breakthroughs happen when you eliminate 80% of trivial tasks and focus obsessively on the single lever that moves the needle.",
-                        keywords = listOf("misconception", "breakthroughs", "eliminate", "single lever"),
-                        emojis = listOf("🎯", "⚡", "💡", "🧠"),
-                        bRollIdeas = listOf(
-                            BRollIdea("Dramatic Spotlight Zoom", 3, "Cinematic camera zoom onto speaker face with bokeh", "Cinematic drone"),
-                            BRollIdea("Leverage Physics Visual", 18, "Abstract minimalist 3D lever lifting enormous weight", "Heavy thud")
-                        ),
-                        socialCopies = listOf(
-                            SocialPostCopy("TikTok", "This will change how you view productivity forever 🤯", "The 80/20 rule explained simply", listOf("#productivity", "#mindset", "#lifehacks", "#opusclip")),
-                            SocialPostCopy("Instagram Reels", "Work smarter, not harder. 🎯 Save this reminder for your week.", "The single rule for exponential output", listOf("#growthmindset", "#focus", "#motivation")),
-                            SocialPostCopy("YouTube Shorts", "Stop hustling 24/7! Watch this instead 🚀", "The secret of high achievers", listOf("#shorts", "#mindset", "#success")),
-                            SocialPostCopy("LinkedIn", "Strategic prioritization and the power of eliminating low-leverage activities.", "Mastering High-Leverage Focus in Leadership", listOf("#productivity", "#strategy", "#leadership"))
-                        )
-                    ),
-                    ClipGenerationData(
-                        title = "How the Top 1% Think Differently Under Pressure",
-                        startTimeSec = 80,
-                        endTimeSec = 132,
-                        viralityScore = 92,
-                        hookScore = 94,
-                        retentionScore = 91,
-                        emotionalScore = 89,
-                        shareabilityScore = 91,
-                        punchlineScore = 90,
-                        hookExplanation = "Appeals to aspirational identity (top 1%) and high-stakes performance psychology.",
-                        transcript = "Amateurs react to emotions. Professionals observe emotions and execute the protocol. When chaos hits, ask yourself: 'What is the objective fact right now, and what is the next best move?' That single question resets your nervous system.",
-                        keywords = listOf("amateurs", "professionals", "protocol", "chaos", "objective fact"),
-                        emojis = listOf("♟️", "👑", "🧊", "🎯"),
-                        bRollIdeas = listOf(
-                            BRollIdea("Chess Grandmaster Move", 5, "Dramatic close up of hand sliding a queen piece forward", "Clock tick"),
-                            BRollIdea("Zen Calm Water Surface", 22, "Ripple effect settling into glass-like stillness", "Gentle water chime")
-                        ),
-                        socialCopies = listOf(
-                            SocialPostCopy("TikTok", "Master your mind under pressure in 10 seconds ♟️", "How the top 1% handle stress", listOf("#mindset", "#discipline", "#mentaltoughness", "#viral")),
-                            SocialPostCopy("Instagram Reels", "Emotion vs Execution. 🧠 Send this to someone who needs to hear it today.", "How professionals navigate chaos", listOf("#stoicism", "#mentalclarity", "#discipline")),
-                            SocialPostCopy("YouTube Shorts", "The #1 mental framework for elite performers! 👑", "Amateurs vs Professionals", listOf("#shorts", "#psychology", "#growth")),
-                            SocialPostCopy("LinkedIn", "Emotional regulation and high-conviction decision making during organizational crises.", "Executive Poise: Decoupling Emotion from Execution", listOf("#executivedevelopment", "#crisismanagement", "#leadership"))
-                        )
-                    )
-                )
-            }
-        }
-    }
+    ): List<ClipGenerationData> = emptyList()
 
     suspend fun generateSpeechToTextCaptions(
         spokenTextOrAudioPrompt: String,

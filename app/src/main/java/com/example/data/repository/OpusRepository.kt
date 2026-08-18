@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.os.Environment
 import android.util.Log
 import com.example.data.db.OpusDatabase
 import com.example.data.model.AiProviderConfig
@@ -25,6 +27,7 @@ import com.example.data.model.UserCreditState
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
+import com.example.data.video.Media3VideoProcessor
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -36,6 +39,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
@@ -59,7 +63,9 @@ class OpusRepository(context: Context) {
     private val videoProcessingCacheDao = db.videoProcessingCacheDao()
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
-    val geminiService = GeminiClipService()
+    private val appContext = context.applicationContext
+    val geminiService = GeminiClipService(appContext)
+    private val videoProcessor = Media3VideoProcessor(appContext)
     val aiRouter = com.example.domain.ai.IntelligentAiRouter(
         listOf(
             com.example.domain.ai.ProductionGeminiProvider(
@@ -67,7 +73,7 @@ class OpusRepository(context: Context) {
                 AiProviderConfig(
                     id = "gemini-prod",
                     name = "Google Gemini 2.5 Flash",
-                    providerType = com.example.data.model.AiProviderType.GEMINI.name,
+                    providerType = AiProviderType.GEMINI.name,
                     apiKey = com.example.BuildConfig.GEMINI_API_KEY,
                     modelName = "gemini-2.5-flash",
                     priority = 1,
@@ -649,13 +655,21 @@ class OpusRepository(context: Context) {
         _processingStep.value = ProcessingStep.ScanningHooks
         delay(900)
 
+        val inputMediaUri = sourceUrl.toMediaUriOrNull()
         val clipsData = geminiService.analyzeAndGenerateClips(
             title = title,
             sourceUrl = sourceUrl,
             transcriptOrPrompt = transcriptOrPrompt,
             durationMinutes = durationMinutes,
-            providers = _aiProviders.value
+            providers = _aiProviders.value,
+            videoUri = inputMediaUri?.takeIf { it.scheme == "content" || it.scheme == "file" }
         )
+        if (clipsData.isEmpty()) {
+            _processingStep.value = ProcessingStep.Idle
+            throw IllegalStateException(
+                "لم يُرجع مزود الذكاء الاصطناعي مقاطع حقيقية. أضف مفتاحاً صالحاً ونصاً أو فيديو قابلاً للتحليل."
+            )
+        }
 
         // Deduct Google Flow Credits
         deductGoogleFlowCredits(durationMinutes)
@@ -693,6 +707,43 @@ class OpusRepository(context: Context) {
         }
 
         clipDao.insertClips(clipEntities)
+
+        // Real render step inspired by PublikClip's separate scoring/rendering
+        // stages. Only local files, content Uris, and direct media URLs are
+        // rendered here; a YouTube/Drive webpage URL must first be resolved to
+        // an authorized media Uri by a downloader or Drive integration.
+        val mediaUri = inputMediaUri
+        if (mediaUri != null) {
+            _processingStep.value = ProcessingStep.StylingCaptions
+            val exportRoot = File(
+                appContext.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+                    ?: appContext.cacheDir,
+                "opus_clips/$newProjectId"
+            )
+            val storedClips = clipDao.getClipsForProjectSync(newProjectId)
+            clipsData.forEachIndexed { index, data ->
+                val storedClip = storedClips.firstOrNull {
+                    it.title == data.title &&
+                        it.startTimeSec == data.startTimeSec &&
+                        it.endTimeSec == data.endTimeSec
+                } ?: storedClips.getOrNull(index)
+                try {
+                    val output = File(exportRoot, "clip_${index + 1}.mp4")
+                    videoProcessor.exportClip(
+                        inputUri = mediaUri,
+                        outputFile = output,
+                        startTimeSec = data.startTimeSec,
+                        endTimeSec = data.endTimeSec,
+                        vertical = true
+                    ) { progress ->
+                        _processingStep.value = ProcessingStep.StylingCaptions
+                    }
+                    storedClip?.let { clipDao.updateExportPath(it.id, output.absolutePath) }
+                } catch (error: Exception) {
+                    Log.w("OpusRepository", "Real clip export failed for clip ${index + 1}", error)
+                }
+            }
+        }
 
         val processingDurationMs = System.currentTimeMillis() - startTime
 
@@ -778,6 +829,20 @@ class OpusRepository(context: Context) {
         _processingStep.value = ProcessingStep.Idle
 
         return@withContext newProjectId
+    }
+
+
+    private fun String.toMediaUriOrNull(): Uri? {
+        val uri = runCatching { Uri.parse(trim()) }.getOrNull() ?: return null
+        val scheme = uri.scheme?.lowercase() ?: return null
+        if (scheme == "content" || scheme == "file") return uri
+        if (scheme != "http" && scheme != "https") return null
+        val path = uri.path?.lowercase() ?: return null
+        return if (listOf(".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi").any(path::endsWith)) {
+            uri
+        } else {
+            null
+        }
     }
 
     private fun createClipEntity(
