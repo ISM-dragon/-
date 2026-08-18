@@ -33,6 +33,7 @@ import com.example.ui.screens.ClipCompetitorComparisonScreen
 import com.example.ui.screens.ClipStudioScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ProjectsScreen
+import com.example.ui.screens.UsageDashboardScreen
 import com.example.ui.screens.VideoUploadScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.OpusDarkCanvas
@@ -150,6 +151,9 @@ fun OpusProApp(repository: OpusRepository) {
                                     showApiKeyDialog = true
                                 }
                             )
+                        }
+                        OpusNavTab.DASHBOARD -> {
+                            UsageDashboardScreen(repository = repository)
                         }
                         OpusNavTab.STUDIO -> {
                             ClipStudioScreen(

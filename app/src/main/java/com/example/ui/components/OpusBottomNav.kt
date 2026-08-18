@@ -41,6 +41,7 @@ import com.example.ui.theme.OpusVioletGlow
 
 enum class OpusNavTab(val label: String, val subtitle: String, val testTag: String) {
     HOME("Google Flow", "AI Clipper", "nav_tab_home"),
+    DASHBOARD("Usage", "Dashboard", "nav_tab_dashboard"),
     STUDIO("Studio", "Editor & Hooks", "nav_tab_studio"),
     BENCHMARK("VS Benchmark", "Competitors", "nav_tab_benchmark"),
     PROJECTS("Library", "Saved Clips", "nav_tab_projects"),
@@ -86,6 +87,33 @@ fun OpusBottomNav(
                 unselectedTextColor = OpusTextSecondary
             ),
             modifier = Modifier.testTag(OpusNavTab.HOME.testTag)
+        )
+
+        NavigationBarItem(
+            selected = currentTab == OpusNavTab.DASHBOARD,
+            onClick = { onTabSelected(OpusNavTab.DASHBOARD) },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = "Usage Dashboard",
+                    modifier = Modifier.size(20.dp)
+                )
+            },
+            label = {
+                Text(
+                    text = OpusNavTab.DASHBOARD.label,
+                    fontSize = 9.5.sp,
+                    fontWeight = if (currentTab == OpusNavTab.DASHBOARD) FontWeight.Bold else FontWeight.Medium
+                )
+            },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = OpusViralEmerald,
+                selectedTextColor = OpusViralEmerald,
+                indicatorColor = OpusPrimaryViolet.copy(alpha = 0.35f),
+                unselectedIconColor = OpusTextSecondary,
+                unselectedTextColor = OpusTextSecondary
+            ),
+            modifier = Modifier.testTag(OpusNavTab.DASHBOARD.testTag)
         )
 
         NavigationBarItem(
