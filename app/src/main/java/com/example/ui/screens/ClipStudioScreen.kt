@@ -104,9 +104,9 @@ fun ClipStudioScreen(
 
     val displayedClips = remember(allClips, initialProjectId) {
         if (initialProjectId != null && initialProjectId > 0) {
-            allClips.filter { it.projectId == initialProjectId }.ifEmpty { allClips }
+            allClips.filter { it.projectId == initialProjectId }
         } else {
-            allClips
+            emptyList()
         }
     }
 
@@ -186,7 +186,11 @@ fun ClipStudioScreen(
                     )
                 )
                 Text(
-                    text = "Head to Clipper to paste a link and extract viral shorts!",
+                    text = if (initialProjectId != null && initialProjectId > 0) {
+                        "لم يتم إنشاء ملف MP4 لهذا المشروع بعد. افحص حالة المعالجة أو أعد التصدير."
+                    } else {
+                        "ارفع فيديو محلياً أولاً لإنشاء مقاطعك الحقيقية."
+                    },
                     style = MaterialTheme.typography.bodySmall.copy(color = OpusTextSecondary),
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
                     textAlign = TextAlign.Center
