@@ -62,6 +62,13 @@ class VideoProcessingWorker(
                 stage = "COMPLETED",
                 outputProjectId = projectId
             )
+            ProcessingNotification.show(
+                applicationContext,
+                jobId,
+                "اكتملت معالجة Opus Pro",
+                "تم إنشاء المقاطع وحفظ المشروع رقم $projectId.",
+                success = true
+            )
             setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 100, KEY_STAGE to "COMPLETED", KEY_PROJECT_ID to projectId))
             Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to projectId))
         } catch (cancelled: CancellationException) {
@@ -72,6 +79,13 @@ class VideoProcessingWorker(
                 stage = "CANCELLED",
                 errorMessage = "تم إلغاء المعالجة."
             )
+            ProcessingNotification.show(
+                applicationContext,
+                jobId,
+                "تم إلغاء معالجة Opus Pro",
+                "ألغى المستخدم مهمة معالجة الفيديو.",
+                success = false
+            )
             throw cancelled
         } catch (error: Exception) {
             val message = error.localizedMessage?.takeIf { it.isNotBlank() } ?: "فشلت معالجة الفيديو."
@@ -81,6 +95,13 @@ class VideoProcessingWorker(
                 progress = 0,
                 stage = "FAILED",
                 errorMessage = String.format(Locale.ROOT, "المحاولة %d: %s", attempt, message)
+            )
+            ProcessingNotification.show(
+                applicationContext,
+                jobId,
+                "فشلت معالجة Opus Pro",
+                message,
+                success = false
             )
             Result.failure(workDataOf(KEY_JOB_ID to jobId, KEY_ERROR to message))
         }
