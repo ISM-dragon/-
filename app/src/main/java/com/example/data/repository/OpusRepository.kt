@@ -34,6 +34,7 @@ import com.example.data.model.UserCreditState
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
+import com.example.data.video.FaceTrackingAnalyzer
 import com.example.data.video.Media3VideoProcessor
 import com.example.data.worker.VideoProcessingWorker
 import com.squareup.moshi.JsonAdapter
@@ -77,6 +78,7 @@ class OpusRepository(context: Context) {
     private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
     val geminiService = GeminiClipService(appContext)
     private val videoProcessor = Media3VideoProcessor(appContext)
+    private val faceTrackingAnalyzer = FaceTrackingAnalyzer(appContext)
     val aiRouter = com.example.domain.ai.IntelligentAiRouter(
         listOf(
             com.example.domain.ai.ProductionGeminiProvider(
@@ -967,6 +969,7 @@ class OpusRepository(context: Context) {
         burnInSubtitles: Boolean,
         removeWatermark: Boolean,
         aspectRatioName: String = "9:16",
+        smartReframe: Boolean = true,
         onProgress: (Int) -> Unit = {}
     ): File = withContext(Dispatchers.IO) {
         val clip = clipDao.getClipByIdSync(clipId) ?: error("المقطع غير موجود.")
@@ -979,6 +982,20 @@ class OpusRepository(context: Context) {
             aspectRatioName.contains("16:9") -> com.example.data.video.ExportAspectRatio.LANDSCAPE_16_9
             else -> com.example.data.video.ExportAspectRatio.VERTICAL_9_16
         }
+        val trackedCenterX = if (smartReframe && ratio == com.example.data.video.ExportAspectRatio.VERTICAL_9_16) {
+            faceTrackingAnalyzer.analyze(inputUri, sampleIntervalMs = 750L, maxSamples = 120)
+                .asSequence()
+                .filter { it.timeMs in (clip.startTimeSec * 1000L)..(clip.endTimeSec * 1000L) }
+                .groupBy { it.trackingId }
+                .values
+                .maxByOrNull { it.size }
+                ?.map { it.centerX }
+                ?.average()
+                ?.toFloat()
+        } else {
+            null
+        }
+
         val exportDirectory = File(
             appContext.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: appContext.cacheDir,
             "opus_clips/${clip.projectId}/manual_exports"
@@ -993,6 +1010,7 @@ class OpusRepository(context: Context) {
             aspectRatio = ratio,
             captionCues = if (burnInSubtitles) decodeCaptionCues(clip) else emptyList(),
             watermarkText = if (removeWatermark) "" else "Opus Pro",
+            cropCenterX = trackedCenterX,
             onProgress = onProgress
         )
         clipDao.updateExportPath(clip.id, output.absolutePath)

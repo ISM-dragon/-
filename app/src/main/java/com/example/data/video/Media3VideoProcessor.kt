@@ -16,6 +16,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.Effects
+import androidx.media3.effect.Crop
 import androidx.media3.effect.OverlayEffect
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.TextOverlay
@@ -99,6 +100,7 @@ class Media3VideoProcessor(private val context: Context) {
         aspectRatio: ExportAspectRatio = if (vertical) ExportAspectRatio.VERTICAL_9_16 else ExportAspectRatio.LANDSCAPE_16_9,
         captionCues: List<CaptionCue> = emptyList(),
         watermarkText: String = "",
+        cropCenterX: Float? = null,
         onProgress: (Int) -> Unit = {}
     ): File {
         require(startTimeSec >= 0) { "Clip start time cannot be negative." }
@@ -118,6 +120,18 @@ class Media3VideoProcessor(private val context: Context) {
             .build()
 
         val videoEffects = mutableListOf<androidx.media3.common.Effect>()
+        if (cropCenterX != null) {
+            val source = inspectSource(inputUri)
+            val sourceAspect = source?.width?.toFloat()?.div(source.height.toFloat()) ?: (16f / 9f)
+            val cropFraction = (aspectRatio.value / sourceAspect).coerceAtMost(1f)
+            if (cropFraction < 0.999f) {
+                val halfWidth = cropFraction
+                val boundedCenter = cropCenterX.coerceIn(-1f, 1f)
+                val left = (boundedCenter - halfWidth).coerceIn(-1f, 1f - (2f * halfWidth))
+                val right = left + (2f * halfWidth)
+                videoEffects += Crop(left = left, right = right, bottom = -1f, top = 1f)
+            }
+        }
         if (aspectRatio != ExportAspectRatio.LANDSCAPE_16_9 || vertical) {
             videoEffects += Presentation.createForAspectRatio(
                 aspectRatio.value,
