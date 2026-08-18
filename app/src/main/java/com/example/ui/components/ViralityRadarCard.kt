@@ -57,163 +57,17 @@ import com.example.ui.theme.OpusVioletGlow
 @Composable
 fun ViralityRadarCard(
     clip: Clip,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onCompareClick: (() -> Unit)? = null
 ) {
-    val viralityColor = when {
-        clip.viralityScore >= 90 -> OpusViralEmerald
-        clip.viralityScore >= 80 -> OpusElectricCyan
-        clip.viralityScore >= 70 -> OpusGold
-        else -> OpusVioletGlow
-    }
-
-    Card(
+    ViralityScoreGauge(
+        score = clip.viralityScore,
+        clip = clip,
+        onCompareClick = onCompareClick,
+        showSubmetrics = true,
+        showActionButtons = onCompareClick != null,
         modifier = modifier
-            .fillMaxWidth()
-            .testTag("virality_radar_card"),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, OpusBorder)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            // Header Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.TrendingUp,
-                        contentDescription = "Virality Analysis",
-                        tint = OpusElectricCyan,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Opus Virality Score™",
-                        style = MaterialTheme.typography.titleSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = OpusTextPrimary
-                        )
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(viralityColor.copy(alpha = 0.15f))
-                        .border(1.dp, viralityColor.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = if (clip.viralityScore >= 90) "🔥 High Viral Potential" else "📈 Solid Performer",
-                        color = viralityColor,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Main Score Circle & Submetrics
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Circular Score Display
-                Box(
-                    modifier = Modifier
-                        .size(86.dp)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                listOf(
-                                    viralityColor.copy(alpha = 0.25f),
-                                    OpusDarkSurfaceVariant
-                                )
-                            )
-                        )
-                        .border(2.5.dp, viralityColor, CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "${clip.viralityScore}",
-                            style = MaterialTheme.typography.headlineMedium.copy(
-                                fontWeight = FontWeight.Black,
-                                color = OpusTextPrimary,
-                                fontSize = 30.sp
-                            )
-                        )
-                        Text(
-                            text = "/ 100",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = OpusTextSecondary,
-                                fontSize = 9.sp
-                            )
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(16.dp))
-
-                // Breakdown Bars
-                Column(modifier = Modifier.weight(1f)) {
-                    ScoreBarItem(label = "Hook Strength (0-3s)", score = clip.hookScore, color = OpusElectricCyan)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    ScoreBarItem(label = "Retention Probability", score = clip.retentionScore, color = OpusVioletGlow)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    ScoreBarItem(label = "Emotional Arc", score = clip.emotionalScore, color = OpusHotPink)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    ScoreBarItem(label = "Shareability Index", score = clip.shareabilityScore, color = OpusViralEmerald)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // AI Insight box
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(OpusDarkSurfaceVariant)
-                    .border(1.dp, OpusBorder, RoundedCornerShape(10.dp))
-                    .padding(12.dp)
-            ) {
-                Row(verticalAlignment = Alignment.Top) {
-                    Icon(
-                        imageVector = Icons.Default.Psychology,
-                        contentDescription = "AI Psychology",
-                        tint = OpusVioletGlow,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .padding(top = 2.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "Why AI Selected This Moment:",
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = OpusVioletGlow
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = clip.hookExplanation,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                color = OpusTextPrimary.copy(alpha = 0.9f),
-                                lineHeight = 16.sp
-                            )
-                        )
-                    }
-                }
-            }
-        }
-    }
+    )
 }
 
 @Composable

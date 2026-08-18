@@ -353,4 +353,184 @@ object ComparisonRepository {
     fun getCompetitorBySlug(slug: String): CompetitorComparison? {
         return allCompetitors.firstOrNull { it.slug.equals(slug, ignoreCase = true) }
     }
+
+    val competitorVideoBenchmarks: List<com.example.data.model.CompetitorVideoPerformance> = listOf(
+        com.example.data.model.CompetitorVideoPerformance(
+            id = "hormozi_leads",
+            creatorName = "Alex Hormozi",
+            handle = "@hormozi",
+            videoTitle = "Why 99% Of People Fail To Get Leads In 2026",
+            platform = "TikTok & YouTube Shorts",
+            viewsCount = "4.2M",
+            likeCount = "385K",
+            commentCount = "6.4K",
+            shareRatePercent = 9.6f,
+            viralityScore = 94,
+            hookScore = 96,
+            hookDurationSec = 1.9f,
+            retentionScore = 91,
+            averageWatchTimePercent = 86,
+            pacingCpm = 16,
+            wordsPerMinute = 178,
+            captionStyle = "Hormozi Yellow-Green Pop",
+            hasEmojis = true,
+            hasBRoll = true,
+            bRollCount = 4,
+            topKeywords = listOf("leads", "business growth", "sales framework", "pricing"),
+            hashtags = listOf("#business", "#marketing", "#success", "#hormozi"),
+            audienceCategory = "Entrepreneurship & Business",
+            keyStrengths = listOf(
+                "Sub-2s curiosity gap punchline",
+                "High WPM energetic cadence (178 WPM)",
+                "Contrarian claim in opening frame"
+            ),
+            keyVulnerabilities = listOf(
+                "Slight text overcrowding in lower safe zone",
+                "Monotone studio background with low scenic variety"
+            ),
+            aiComparisonInsight = "Hormozi's clip succeeds on pure high-intensity vocal pacing and contrarian framing. Your clip can beat this by introducing richer dynamic B-Roll cutaways at seconds 8 and 18."
+        ),
+        com.example.data.model.CompetitorVideoPerformance(
+            id = "mrbeast_challenge",
+            creatorName = "MrBeast",
+            handle = "@mrbeast",
+            videoTitle = "I Trapped 100 People In A Diamond Box",
+            platform = "YouTube Shorts",
+            viewsCount = "18.5M",
+            likeCount = "1.4M",
+            commentCount = "22.5K",
+            shareRatePercent = 12.8f,
+            viralityScore = 98,
+            hookScore = 99,
+            hookDurationSec = 1.3f,
+            retentionScore = 97,
+            averageWatchTimePercent = 94,
+            pacingCpm = 26,
+            wordsPerMinute = 186,
+            captionStyle = "MrBeast Neon Impact",
+            hasEmojis = true,
+            hasBRoll = true,
+            bRollCount = 7,
+            topKeywords = listOf("diamond box", "challenge", "prize", "impossible", "elimination"),
+            hashtags = listOf("#mrbeast", "#shorts", "#viral", "#challenge"),
+            audienceCategory = "High-Energy Entertainment",
+            keyStrengths = listOf(
+                "Extreme visual stakes in first 0.8s",
+                "Rapid B-Roll cuts every 2.3 seconds",
+                "Constant tension escalation loop"
+            ),
+            keyVulnerabilities = listOf(
+                "Requires high production budget to replicate exactly",
+                "Lower long-term bookmark/save utility rate"
+            ),
+            aiComparisonInsight = "MrBeast's short relies on hyper-pacing (26 cuts/min). For talking-head and podcast clips, match his opening urgency without sacrificing deep intellectual takeaways."
+        ),
+        com.example.data.model.CompetitorVideoPerformance(
+            id = "doac_neuroscience",
+            creatorName = "The Diary Of A CEO",
+            handle = "@steven",
+            videoTitle = "Neuroscientist Reveals The #1 Dopamine Destroyer",
+            platform = "TikTok & Reels",
+            viewsCount = "6.1M",
+            likeCount = "540K",
+            commentCount = "9.8K",
+            shareRatePercent = 14.2f,
+            viralityScore = 92,
+            hookScore = 93,
+            hookDurationSec = 2.4f,
+            retentionScore = 89,
+            averageWatchTimePercent = 82,
+            pacingCpm = 11,
+            wordsPerMinute = 152,
+            captionStyle = "Clean Editorial White",
+            hasEmojis = true,
+            hasBRoll = true,
+            bRollCount = 3,
+            topKeywords = listOf("neuroscience", "dopamine", "sleep", "habits", "brain health"),
+            hashtags = listOf("#doac", "#stevenbartlett", "#neuroscience", "#habits"),
+            audienceCategory = "Health & Personal Development",
+            keyStrengths = listOf(
+                "Deep curiosity gap ('The #1 thing...')",
+                "High bookmark and share rate for self-improvement",
+                "Crisp podcast audio presence"
+            ),
+            keyVulnerabilities = listOf(
+                "Slower mid-clip pacing between 12s-20s",
+                "Subtitles lack colorful emphasis keywords"
+            ),
+            aiComparisonInsight = "DOAC clips achieve huge viral bookmark rates because of high perceived value. Opus Pro dynamic karaoke captions and active zoom cuts give your clip an aesthetic advantage over their static subtitles."
+        ),
+        com.example.data.model.CompetitorVideoPerformance(
+            id = "ali_productivity",
+            creatorName = "Ali Abdaal",
+            handle = "@aliabdaal",
+            videoTitle = "How I Remember Everything I Read in 3 Steps",
+            platform = "Instagram Reels",
+            viewsCount = "2.1M",
+            likeCount = "192K",
+            commentCount = "3.1K",
+            shareRatePercent = 8.9f,
+            viralityScore = 88,
+            hookScore = 89,
+            hookDurationSec = 2.7f,
+            retentionScore = 86,
+            averageWatchTimePercent = 78,
+            pacingCpm = 12,
+            wordsPerMinute = 160,
+            captionStyle = "Minimalist Notion Dark",
+            hasEmojis = true,
+            hasBRoll = true,
+            bRollCount = 3,
+            topKeywords = listOf("productivity", "reading", "active recall", "studying", "notion"),
+            hashtags = listOf("#aliabdaal", "#productivity", "#studytips", "#books"),
+            audienceCategory = "Productivity & Learning",
+            keyStrengths = listOf(
+                "Numbered list format ('3 Steps') enhances completion rate",
+                "High educational clarity and actionable framework"
+            ),
+            keyVulnerabilities = listOf(
+                "Opening hook takes 2.7s to establish problem",
+                "Low emotional intensity"
+            ),
+            aiComparisonInsight = "Ali's structure is clean but gentle. Your clip's faster hook acceleration gives you a higher click-to-retention conversion in TikTok's fast swipe-away feed."
+        ),
+        com.example.data.model.CompetitorVideoPerformance(
+            id = "huberman_focus",
+            creatorName = "Huberman Lab",
+            handle = "@hubermanlab",
+            videoTitle = "The 90-Second Morning Trick For Zero Brain Fog",
+            platform = "YouTube Shorts & TikTok",
+            viewsCount = "5.4M",
+            likeCount = "480K",
+            commentCount = "7.9K",
+            shareRatePercent = 11.5f,
+            viralityScore = 93,
+            hookScore = 94,
+            hookDurationSec = 2.1f,
+            retentionScore = 90,
+            averageWatchTimePercent = 84,
+            pacingCpm = 10,
+            wordsPerMinute = 148,
+            captionStyle = "Scientific Cyber Glow",
+            hasEmojis = true,
+            hasBRoll = true,
+            bRollCount = 4,
+            topKeywords = listOf("sunlight", "cortisol", "morning routine", "focus", "energy"),
+            hashtags = listOf("#huberman", "#morningroutine", "#health", "#focus"),
+            audienceCategory = "Science & Biohacking",
+            keyStrengths = listOf(
+                "High authoritative credibility",
+                "Ultra-specific timing hook ('90-Second trick')",
+                "Immediate life-application benefit"
+            ),
+            keyVulnerabilities = listOf(
+                "Slow speaking rate requires visual stimulation to keep engagement"
+            ),
+            aiComparisonInsight = "Huberman's strength is perceived authority. Your short clip benefits from tighter trims and dynamic emoji animations to sustain audience energy."
+        )
+    )
+
+    fun getCompetitorVideoById(id: String): com.example.data.model.CompetitorVideoPerformance? {
+        return competitorVideoBenchmarks.firstOrNull { it.id == id }
+    }
 }

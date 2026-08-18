@@ -95,7 +95,8 @@ import kotlinx.coroutines.launch
 fun ClipStudioScreen(
     repository: OpusRepository,
     initialProjectId: Long?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenComparison: ((Long) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -443,7 +444,12 @@ fun ClipStudioScreen(
 
             when (activeTab) {
                 0 -> item {
-                    ViralityRadarCard(clip = activeClip)
+                    ViralityRadarCard(
+                        clip = activeClip,
+                        onCompareClick = {
+                            onOpenComparison?.invoke(activeClip.id)
+                        }
+                    )
                 }
                 1 -> item {
                     AutoCaptionStudioCard(

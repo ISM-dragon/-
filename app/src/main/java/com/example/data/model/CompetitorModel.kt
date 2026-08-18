@@ -52,3 +52,44 @@ data class UserCreditState(
     val renewalDate: String = "September 1, 2026",
     val clipsCreatedCount: Int = 38
 )
+
+@JsonClass(generateAdapter = true)
+data class CompetitorVideoPerformance(
+    val id: String,
+    val creatorName: String,
+    val handle: String,
+    val videoTitle: String,
+    val platform: String, // "TikTok", "YouTube Shorts", "Instagram Reels"
+    val viewsCount: String, // e.g. "3.8M"
+    val likeCount: String, // e.g. "412K"
+    val commentCount: String, // e.g. "8.2K"
+    val shareRatePercent: Float, // e.g. 9.4%
+    val viralityScore: Int, // e.g. 94
+    val hookScore: Int, // e.g. 96
+    val hookDurationSec: Float, // e.g. 2.1s
+    val retentionScore: Int, // e.g. 91
+    val averageWatchTimePercent: Int, // e.g. 84%
+    val pacingCpm: Int, // Cuts Per Minute e.g. 18
+    val wordsPerMinute: Int, // e.g. 172
+    val captionStyle: String, // e.g. "Bold Yellow & Green Pop"
+    val hasEmojis: Boolean = true,
+    val hasBRoll: Boolean = true,
+    val bRollCount: Int = 4,
+    val topKeywords: List<String> = emptyList(),
+    val hashtags: List<String> = emptyList(),
+    val audienceCategory: String = "General Viral",
+    val keyStrengths: List<String> = emptyList(),
+    val keyVulnerabilities: List<String> = emptyList(),
+    val aiComparisonInsight: String = ""
+)
+
+data class MetricComparisonItem(
+    val metricName: String,
+    val clipValue: Float,
+    val clipDisplay: String,
+    val competitorValue: Float,
+    val competitorDisplay: String,
+    val isHigherBetter: Boolean = true,
+    val unit: String = "%",
+    val explanation: String = ""
+)

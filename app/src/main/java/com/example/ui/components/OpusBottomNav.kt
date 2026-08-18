@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material3.Icon
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.example.ui.theme.OpusBorder
 import com.example.ui.theme.OpusDarkSurface
 import com.example.ui.theme.OpusElectricCyan
+import com.example.ui.theme.OpusGold
 import com.example.ui.theme.OpusPrimaryViolet
 import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
@@ -36,6 +38,7 @@ import com.example.ui.theme.OpusVioletGlow
 enum class OpusNavTab(val label: String, val subtitle: String, val testTag: String) {
     HOME("Google Flow", "AI Clipper", "nav_tab_home"),
     STUDIO("Studio", "Editor & Hooks", "nav_tab_studio"),
+    BENCHMARK("VS Benchmark", "Competitors", "nav_tab_benchmark"),
     PROJECTS("Library", "Saved Clips", "nav_tab_projects")
 }
 
@@ -66,7 +69,7 @@ fun OpusBottomNav(
             label = {
                 Text(
                     text = OpusNavTab.HOME.label,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = if (currentTab == OpusNavTab.HOME) FontWeight.Bold else FontWeight.Medium
                 )
             },
@@ -93,7 +96,7 @@ fun OpusBottomNav(
             label = {
                 Text(
                     text = OpusNavTab.STUDIO.label,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = if (currentTab == OpusNavTab.STUDIO) FontWeight.Bold else FontWeight.Medium
                 )
             },
@@ -105,6 +108,33 @@ fun OpusBottomNav(
                 unselectedTextColor = OpusTextSecondary
             ),
             modifier = Modifier.testTag(OpusNavTab.STUDIO.testTag)
+        )
+
+        NavigationBarItem(
+            selected = currentTab == OpusNavTab.BENCHMARK,
+            onClick = { onTabSelected(OpusNavTab.BENCHMARK) },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.CompareArrows,
+                    contentDescription = "Side-by-Side Benchmark",
+                    modifier = Modifier.size(22.dp)
+                )
+            },
+            label = {
+                Text(
+                    text = OpusNavTab.BENCHMARK.label,
+                    fontSize = 10.sp,
+                    fontWeight = if (currentTab == OpusNavTab.BENCHMARK) FontWeight.Bold else FontWeight.Medium
+                )
+            },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = OpusGold,
+                selectedTextColor = OpusGold,
+                indicatorColor = OpusPrimaryViolet.copy(alpha = 0.35f),
+                unselectedIconColor = OpusTextSecondary,
+                unselectedTextColor = OpusTextSecondary
+            ),
+            modifier = Modifier.testTag(OpusNavTab.BENCHMARK.testTag)
         )
 
         NavigationBarItem(
@@ -120,7 +150,7 @@ fun OpusBottomNav(
             label = {
                 Text(
                     text = OpusNavTab.PROJECTS.label,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = if (currentTab == OpusNavTab.PROJECTS) FontWeight.Bold else FontWeight.Medium
                 )
             },

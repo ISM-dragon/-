@@ -28,6 +28,7 @@ import com.example.ui.components.ApiKeySettingsDialog
 import com.example.ui.components.OpusBottomNav
 import com.example.ui.components.OpusHeader
 import com.example.ui.components.OpusNavTab
+import com.example.ui.screens.ClipCompetitorComparisonScreen
 import com.example.ui.screens.ClipStudioScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ProjectsScreen
@@ -57,6 +58,7 @@ class MainActivity : ComponentActivity() {
 fun OpusProApp(repository: OpusRepository) {
     var currentTab by remember { mutableStateOf(OpusNavTab.HOME) }
     var selectedProjectId by remember { mutableLongStateOf(1L) }
+    var selectedComparisonClipId by remember { mutableStateOf<Long?>(null) }
     var showUploadScreen by remember { mutableStateOf(false) }
     var showApiKeyDialog by remember { mutableStateOf(false) }
 
@@ -150,7 +152,21 @@ fun OpusProApp(repository: OpusRepository) {
                         OpusNavTab.STUDIO -> {
                             ClipStudioScreen(
                                 repository = repository,
-                                initialProjectId = selectedProjectId
+                                initialProjectId = selectedProjectId,
+                                onOpenComparison = { clipId ->
+                                    selectedComparisonClipId = clipId
+                                    currentTab = OpusNavTab.BENCHMARK
+                                }
+                            )
+                        }
+                        OpusNavTab.BENCHMARK -> {
+                            ClipCompetitorComparisonScreen(
+                                repository = repository,
+                                initialClipId = selectedComparisonClipId,
+                                onBack = { currentTab = OpusNavTab.STUDIO },
+                                onOpenStudio = { clipId ->
+                                    currentTab = OpusNavTab.STUDIO
+                                }
                             )
                         }
                         OpusNavTab.PROJECTS -> {
