@@ -79,6 +79,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -126,8 +127,8 @@ fun ApiManagementSettingsScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    val aiProviders by repository.aiProviders.collectAsState()
-    val googleFlowCredits by repository.googleFlowCredits.collectAsState()
+    val aiProviders by repository.aiProviders.collectAsStateWithLifecycle()
+    val googleFlowCredits by repository.googleFlowCredits.collectAsStateWithLifecycle()
 
     var selectedFilterTab by remember { mutableIntStateOf(0) } // 0: All Providers, 1: Major LLMs (OpenAI/Anthropic/Gemini), 2: High-Speed/Routing
     var isAddingCustomProvider by remember { mutableStateOf(false) }
@@ -711,7 +712,7 @@ fun ApiManagementSettingsScreen(
                             color = OpusTextPrimary
                         )
                         Text(
-                            text = "Your API keys never touch our servers. They are stored securely in Android on-device keystore & SharedPreferences.",
+                            text = "Your API keys never touch our servers. Secrets are encrypted with Android Keystore before local storage.",
                             fontSize = 10.sp,
                             lineHeight = 14.sp,
                             color = OpusTextSecondary

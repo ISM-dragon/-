@@ -1,10 +1,14 @@
 package com.example.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.squareup.moshi.JsonClass
 
-@Entity(tableName = "projects")
+@Entity(
+    tableName = "projects",
+    indices = [Index(value = ["createdAt"]), Index(value = ["status"])]
+)
 @JsonClass(generateAdapter = true)
 data class Project(
     @PrimaryKey(autoGenerate = true)
@@ -20,7 +24,14 @@ data class Project(
     val createdAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "clips")
+@Entity(
+    tableName = "clips",
+    indices = [
+        Index(value = ["projectId"]),
+        Index(value = ["isFavorite"]),
+        Index(value = ["viralityScore"])
+    ]
+)
 @JsonClass(generateAdapter = true)
 data class Clip(
     @PrimaryKey(autoGenerate = true)

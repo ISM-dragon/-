@@ -5,6 +5,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.room.withTransaction
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.example.data.db.OpusDatabase
 import com.example.data.model.AiProviderConfig
 import com.example.data.model.AiProviderType
@@ -19,12 +28,17 @@ import com.example.data.model.DirectApiPublishLog
 import com.example.data.model.DirectPlatformApiCredentials
 import com.example.data.model.GoogleFlowCreditInfo
 import com.example.data.model.Project
+import com.example.data.model.ProcessingRequestEntity
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.SocialPostCopy
 import com.example.data.model.UserCreditState
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
+import com.example.data.settings.SecureSettingsStore
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -34,11 +48,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+import com.example.data.worker.AutoPublishWorker
+import com.example.data.worker.VideoProcessingWorker
 import org.json.JSONObject
 
 sealed class ProcessingStep(val stepNumber: Int, val title: String, val description: String) {
@@ -52,6 +73,7 @@ sealed class ProcessingStep(val stepNumber: Int, val title: String, val descript
 
 class OpusRepository(context: Context) {
 
+    private val appContext = context.applicationContext
     private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
     private val db = OpusDatabase.getDatabase(context)
     private val projectDao = db.projectDao()
@@ -59,12 +81,19 @@ class OpusRepository(context: Context) {
     private val videoProcessingCacheDao = db.videoProcessingCacheDao()
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
+    private val processingRequestDao = db.processingRequestDao()
     private val geminiService = GeminiClipService()
 
     private val apiPrefs = context.getSharedPreferences("opus_api_settings", Context.MODE_PRIVATE)
+    private val secureSettings = SecureSettingsStore(
+        context = context,
+        legacyPreferenceNames = setOf("opus_api_settings", "opus_direct_platform_apis")
+    )
+    private val allowDemoFallback = apiPrefs.getBoolean("allow_demo_fallback", true)
 
     init {
         migrateLegacyDemoMetrics()
+        geminiService.allowLocalDemoFallback = allowDemoFallback
     }
 
     private fun migrateLegacyDemoMetrics() {
@@ -170,7 +199,7 @@ class OpusRepository(context: Context) {
     }
 
     private fun loadAiProviders(): List<AiProviderConfig> {
-        val json = apiPrefs.getString("ai_providers_json", null)
+        val json = secureSettings.getSecret("ai_providers_json")
         if (!json.isNullOrBlank()) {
             try {
                 val listType = Types.newParameterizedType(List::class.java, AiProviderConfig::class.java)
@@ -182,7 +211,7 @@ class OpusRepository(context: Context) {
                 Log.e("OpusRepository", "Failed to parse saved ai providers", e)
             }
         }
-        val currentGeminiKey = apiPrefs.getString("custom_gemini_key", "") ?: ""
+        val currentGeminiKey = secureSettings.getSecret("custom_gemini_key").orEmpty()
         return if (currentGeminiKey.isBlank()) {
             emptyList()
         } else {
@@ -233,7 +262,7 @@ class OpusRepository(context: Context) {
         val listType = Types.newParameterizedType(List::class.java, AiProviderConfig::class.java)
         val adapter: JsonAdapter<List<AiProviderConfig>> = moshi.adapter(listType)
         val json = adapter.toJson(providers)
-        apiPrefs.edit().putString("ai_providers_json", json).apply()
+        secureSettings.putSecret("ai_providers_json", json)
         _aiProviders.value = providers
 
         // Sync primary gemini key
@@ -241,7 +270,7 @@ class OpusRepository(context: Context) {
         if (primaryGemini != null) {
             geminiService.customApiKey = primaryGemini.apiKey
             _customApiKey.value = primaryGemini.apiKey
-            apiPrefs.edit().putString("custom_gemini_key", primaryGemini.apiKey).apply()
+            secureSettings.putSecret("custom_gemini_key", primaryGemini.apiKey)
         }
     }
 
@@ -289,12 +318,12 @@ class OpusRepository(context: Context) {
     private val directApiPrefs = context.getSharedPreferences("opus_direct_platform_apis", Context.MODE_PRIVATE)
     private val _directApiCredentials = MutableStateFlow(
         DirectPlatformApiCredentials(
-            youtubeApiKey = directApiPrefs.getString("yt_api_key", "") ?: "",
-            youtubeBearerToken = directApiPrefs.getString("yt_bearer_token", "") ?: "",
-            tiktokAccessToken = directApiPrefs.getString("tiktok_access_token", "") ?: "",
-            instagramAccessToken = directApiPrefs.getString("ig_access_token", "") ?: "",
-            instagramAccountId = directApiPrefs.getString("ig_account_id", "") ?: "",
-            twitterBearerToken = directApiPrefs.getString("x_bearer_token", "") ?: "",
+            youtubeApiKey = secureSettings.getSecret("yt_api_key").orEmpty(),
+            youtubeBearerToken = secureSettings.getSecret("yt_bearer_token").orEmpty(),
+            tiktokAccessToken = secureSettings.getSecret("tiktok_access_token").orEmpty(),
+            instagramAccessToken = secureSettings.getSecret("ig_access_token").orEmpty(),
+            instagramAccountId = secureSettings.getSecret("ig_account_id").orEmpty(),
+            twitterBearerToken = secureSettings.getSecret("x_bearer_token").orEmpty(),
             isDirectApiEnabled = directApiPrefs.getBoolean("direct_api_enabled", true)
         )
     )
@@ -304,13 +333,13 @@ class OpusRepository(context: Context) {
     val recentPublishLogs = _recentPublishLogs.asStateFlow()
 
     suspend fun saveDirectApiCredentials(creds: DirectPlatformApiCredentials) = withContext(Dispatchers.IO) {
+        secureSettings.putSecret("yt_api_key", creds.youtubeApiKey.trim())
+        secureSettings.putSecret("yt_bearer_token", creds.youtubeBearerToken.trim())
+        secureSettings.putSecret("tiktok_access_token", creds.tiktokAccessToken.trim())
+        secureSettings.putSecret("ig_access_token", creds.instagramAccessToken.trim())
+        secureSettings.putSecret("ig_account_id", creds.instagramAccountId.trim())
+        secureSettings.putSecret("x_bearer_token", creds.twitterBearerToken.trim())
         directApiPrefs.edit()
-            .putString("yt_api_key", creds.youtubeApiKey.trim())
-            .putString("yt_bearer_token", creds.youtubeBearerToken.trim())
-            .putString("tiktok_access_token", creds.tiktokAccessToken.trim())
-            .putString("ig_access_token", creds.instagramAccessToken.trim())
-            .putString("ig_account_id", creds.instagramAccountId.trim())
-            .putString("x_bearer_token", creds.twitterBearerToken.trim())
             .putBoolean("direct_api_enabled", creds.isDirectApiEnabled)
             .apply()
         _directApiCredentials.value = creds
@@ -409,15 +438,24 @@ class OpusRepository(context: Context) {
         geminiService.customApiKey = _customApiKey.value
     }
 
+    suspend fun setDemoFallbackEnabled(enabled: Boolean) = withContext(Dispatchers.IO) {
+        apiPrefs.edit().putBoolean("allow_demo_fallback", enabled).apply()
+        geminiService.allowLocalDemoFallback = enabled
+    }
+
     suspend fun saveCustomApiKey(key: String) = withContext(Dispatchers.IO) {
         val trimmed = key.trim()
-        apiPrefs.edit().putString("custom_gemini_key", trimmed).apply()
+        if (trimmed.isBlank()) {
+            secureSettings.removeSecret("custom_gemini_key")
+        } else {
+            secureSettings.putSecret("custom_gemini_key", trimmed)
+        }
         geminiService.customApiKey = trimmed
         _customApiKey.value = trimmed
     }
 
     suspend fun clearCustomApiKey() = withContext(Dispatchers.IO) {
-        apiPrefs.edit().remove("custom_gemini_key").apply()
+        secureSettings.removeSecret("custom_gemini_key")
         geminiService.customApiKey = null
         _customApiKey.value = ""
     }
@@ -444,10 +482,25 @@ class OpusRepository(context: Context) {
     val allClips: Flow<List<Clip>> = clipDao.getAllClips()
     val favoriteClips: Flow<List<Clip>> = clipDao.getFavoriteClips()
 
+    fun pagedProjects(query: String): Flow<PagingData<Project>> = Pager(
+        config = PagingConfig(pageSize = 25, initialLoadSize = 25, enablePlaceholders = false),
+        pagingSourceFactory = { projectDao.pagingProjects(query.trim()) }
+    ).flow
+
+    fun pagedFavoriteClips(query: String): Flow<PagingData<Clip>> = Pager(
+        config = PagingConfig(pageSize = 25, initialLoadSize = 25, enablePlaceholders = false),
+        pagingSourceFactory = { clipDao.pagingFavoriteClips(query.trim()) }
+    ).flow
+
+    fun pagedHistory(query: String): Flow<PagingData<RepurposingHistoryEntity>> = Pager(
+        config = PagingConfig(pageSize = 25, initialLoadSize = 25, enablePlaceholders = false),
+        pagingSourceFactory = { repurposingHistoryDao.pagingHistory(query.trim()) }
+    ).flow
+
     // Room Database Flows for Caching, Viral Scores & User History
     val repurposingHistory: Flow<List<RepurposingHistoryEntity>> = repurposingHistoryDao.getAllHistory()
     val recentRepurposingHistory: Flow<List<RepurposingHistoryEntity>> = repurposingHistoryDao.getRecentHistory(20)
-    val cachedVideoMetadata: Flow<List<VideoProcessingCacheEntity>> = videoProcessingCacheDao.getAllCachedMetadata()
+    val cachedVideoMetadata: Flow<List<VideoProcessingCacheEntity>> = videoProcessingCacheDao.getRecentCacheEntries(50)
     val topViralScoreMetrics: Flow<List<ViralScoreMetricEntity>> = viralScoreMetricDao.getTopViralClips(15)
     val totalTimeSavedMinutes: Flow<Int?> = repurposingHistoryDao.getTotalEstimatedTimeSaved()
     val totalClipsFromHistory: Flow<Int?> = repurposingHistoryDao.getTotalClipsGenerated()
@@ -501,7 +554,7 @@ class OpusRepository(context: Context) {
                     captionTheme = "Opus Neon"
                 )
             }
-            clipDao.insertClips(clipEntities)
+            val insertedClipIds = clipDao.insertClips(clipEntities)
 
             // Seed initial video processing cache metadata
             val cacheEntity = VideoProcessingCacheEntity(
@@ -524,7 +577,7 @@ class OpusRepository(context: Context) {
             // Seed granular viral score metrics for clips
             val initialScores = clipsData.mapIndexed { index, clipData ->
                 ViralScoreMetricEntity(
-                    clipId = (index + 1).toLong(),
+                    clipId = insertedClipIds.getOrElse(index) { 0L },
                     projectId = 1,
                     clipTitle = clipData.title,
                     overallViralityScore = clipData.viralityScore,
@@ -570,7 +623,72 @@ class OpusRepository(context: Context) {
         transcriptOrPrompt: String,
         durationMinutes: Int,
         targetPlatform: String,
-        captionTheme: String
+        captionTheme: String,
+        layoutType: String = "9:16 Full Screen"
+    ): Long {
+        _processingStep.value = ProcessingStep.Transcribing
+        val requestId = UUID.randomUUID().toString()
+        processingRequestDao.insert(
+            ProcessingRequestEntity(
+                requestId = requestId,
+                title = title,
+                sourceUrl = sourceUrl,
+                transcriptOrPrompt = transcriptOrPrompt,
+                durationMinutes = durationMinutes,
+                targetPlatform = targetPlatform,
+                captionTheme = captionTheme,
+                layoutType = layoutType
+            )
+        )
+
+        val workRequest = OneTimeWorkRequestBuilder<VideoProcessingWorker>()
+            .setInputData(Data.Builder().putString(VideoProcessingWorker.REQUEST_ID_KEY, requestId).build())
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
+            .build()
+
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            "video_processing_$requestId",
+            ExistingWorkPolicy.KEEP,
+            workRequest
+        )
+
+        val result = WorkManager.getInstance(appContext)
+            .getWorkInfoByIdFlow(workRequest.id)
+            .filterNotNull()
+            .map { info -> info to info.state.isFinished }
+            .first { (_, isFinished) -> isFinished }
+            .first
+
+        if (result.state != WorkInfo.State.SUCCEEDED) {
+            _processingStep.value = ProcessingStep.Idle
+            throw IllegalStateException(
+                result.outputData.getString(VideoProcessingWorker.ERROR_KEY)
+                    ?: "Video processing failed with state ${result.state}"
+            )
+        }
+        val projectId = result.outputData.getLong(VideoProcessingWorker.PROJECT_ID_KEY, -1L)
+            .takeIf { it > 0L }
+            ?: run {
+                _processingStep.value = ProcessingStep.Idle
+                throw IllegalStateException("Processing completed without a project id")
+            }
+        _processingStep.value = ProcessingStep.Completed
+        return projectId
+    }
+
+    internal suspend fun processNewVideoInternal(
+        title: String,
+        sourceUrl: String,
+        transcriptOrPrompt: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String,
+        layoutType: String = "9:16 Full Screen"
     ): Long = withContext(Dispatchers.IO) {
         val startTime = System.currentTimeMillis()
 
@@ -625,11 +743,12 @@ class OpusRepository(context: Context) {
             createClipEntity(
                 projectId = newProjectId,
                 data = clipData,
-                captionTheme = captionTheme
+                captionTheme = captionTheme,
+                layoutType = layoutType
             )
         }
 
-        clipDao.insertClips(clipEntities)
+        val insertedClipIds = clipDao.insertClips(clipEntities)
 
         val processingDurationMs = System.currentTimeMillis() - startTime
 
@@ -654,7 +773,7 @@ class OpusRepository(context: Context) {
         // 2. Cache granular viral score breakdown for each generated clip
         val viralScoreEntities = clipsData.mapIndexed { index, clipData ->
             ViralScoreMetricEntity(
-                clipId = newProjectId * 100 + (index + 1),
+                clipId = insertedClipIds.getOrElse(index) { 0L },
                 projectId = newProjectId,
                 clipTitle = clipData.title,
                 overallViralityScore = clipData.viralityScore,
@@ -717,10 +836,18 @@ class OpusRepository(context: Context) {
         return@withContext newProjectId
     }
 
+    internal suspend fun getProcessingRequest(requestId: String): ProcessingRequestEntity? =
+        processingRequestDao.getById(requestId)
+
+    internal suspend fun deleteProcessingRequest(requestId: String) {
+        processingRequestDao.deleteById(requestId)
+    }
+
     private fun createClipEntity(
         projectId: Long,
         data: ClipGenerationData,
-        captionTheme: String
+        captionTheme: String,
+        layoutType: String = "9:16 Full Screen"
     ): Clip {
         val words = data.transcript.split(" ")
         val duration = maxOf(15, data.endTimeSec - data.startTimeSec)
@@ -775,7 +902,7 @@ class OpusRepository(context: Context) {
             animatedCaptionsJson = animatedWordsAdapter.toJson(animatedWords),
             bRollPromptsJson = bRollAdapter.toJson(data.bRollIdeas),
             socialCopyJson = socialAdapter.toJson(data.socialCopies),
-            layoutType = "9:16 Full Screen",
+            layoutType = layoutType,
             isFavorite = data.viralityScore >= 95
         )
     }
@@ -846,13 +973,40 @@ class OpusRepository(context: Context) {
     }
 
     suspend fun deleteProject(projectId: Long) = withContext(Dispatchers.IO) {
-        clipDao.deleteClipsForProject(projectId)
-        projectDao.deleteProjectById(projectId)
+        db.withTransaction {
+            val project = projectDao.getProjectByIdSync(projectId)
+            clipDao.deleteClipsForProject(projectId)
+            viralScoreMetricDao.deleteScoresForProject(projectId)
+            repurposingHistoryDao.deleteHistoryForProject(projectId)
+            project?.sourceUrl?.takeIf { it.isNotBlank() }?.let { sourceUrl ->
+                videoProcessingCacheDao.deleteCacheByUrl(sourceUrl)
+            }
+            projectDao.deleteProjectById(projectId)
+        }
     }
 
     suspend fun getBestClipForProject(projectId: Long): Clip? = withContext(Dispatchers.IO) {
         val clips = clipDao.getClipsForProject(projectId).firstOrNull() ?: emptyList()
         return@withContext clips.maxByOrNull { it.viralityScore } ?: clips.firstOrNull()
+    }
+
+    fun enqueueAutoPublishForNewProject(projectId: Long): UUID? {
+        if (!_autoPublishConfig.value.isEnabled) return null
+        val request = OneTimeWorkRequestBuilder<AutoPublishWorker>()
+            .setInputData(Data.Builder().putLong(AutoPublishWorker.PROJECT_ID_KEY, projectId).build())
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            "auto_publish_$projectId",
+            ExistingWorkPolicy.KEEP,
+            request
+        )
+        return request.id
     }
 
     suspend fun dispatchAutoPublishForNewProject(projectId: Long, context: Context): AutoPublishResult? = withContext(Dispatchers.IO) {
@@ -927,14 +1081,21 @@ class OpusRepository(context: Context) {
         }
 
         val successCount = apiLogs.count { it.isSuccess }
-        val message = if (successCount > 0) {
-            "تم النشر التلقائي المباشر عبر الـ API بنجاح على $successCount من المنصات (${platformsToDispatch.joinToString(" • ")}) بدون الحاجة لأي تطبيقات أو أدوات وسيطة!"
-        } else {
-            "تم تجهيز ونشر الفيديو تلقائياً على ${platformsToDispatch.joinToString(" و ")} بنجاح!"
+        val dispatchSucceeded = successCount > 0 || webhookSuccess
+        val message = when {
+            successCount > 0 -> {
+                "تم النشر التلقائي المباشر عبر الـ API بنجاح على $successCount من المنصات (${platformsToDispatch.joinToString(" • ")}) بدون الحاجة لأي تطبيقات أو أدوات وسيطة!"
+            }
+            webhookSuccess -> {
+                "تم إرسال بيانات النشر إلى webhook بنجاح، لكن لم يتم تأكيد النشر المباشر عبر المنصات."
+            }
+            else -> {
+                "تعذر النشر التلقائي على المنصات المحددة. تم تجهيز النص ونسخه فقط إن كان خيار النسخ مفعلاً."
+            }
         }
 
         return@withContext AutoPublishResult(
-            isSuccess = true,
+            isSuccess = dispatchSucceeded,
             message = message,
             dispatchedPlatforms = platformsToDispatch,
             webhookDispatched = webhookSuccess,

@@ -63,11 +63,11 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +82,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Switch
@@ -122,12 +124,13 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-    val processingStep by repository.processingStep.collectAsState()
-    val customApiKey by repository.customApiKey.collectAsState()
-    val googleFlowCredits by repository.googleFlowCredits.collectAsState()
-    val aiProviders by repository.aiProviders.collectAsState()
-    val allProjects by repository.allProjects.collectAsState(initial = emptyList())
+    val homeViewModel: HomeViewModel = viewModel(factory = HomeViewModel.Factory(repository))
+    val homeUiState by homeViewModel.uiState.collectAsStateWithLifecycle()
+    val processingStep by repository.processingStep.collectAsStateWithLifecycle()
+    val customApiKey by repository.customApiKey.collectAsStateWithLifecycle()
+    val googleFlowCredits by repository.googleFlowCredits.collectAsStateWithLifecycle()
+    val aiProviders by repository.aiProviders.collectAsStateWithLifecycle()
+    val allProjects by repository.allProjects.collectAsStateWithLifecycle(initialValue = emptyList())
 
     var inputSourceMode by remember { mutableIntStateOf(0) } // 0: URL / Prompt, 1: Device Media Picker
     var videoUrl by remember { mutableStateOf("") }
@@ -137,12 +140,29 @@ fun HomeScreen(
     var selectedCaptionTheme by remember { mutableStateOf("Opus Neon") }
     var selectedPlatform by remember { mutableStateOf("TikTok & Reels (9:16)") }
     var autoDetectAiTemplate by remember { mutableStateOf(true) }
-    var detectedRecommendation by remember { mutableStateOf<AiTemplateRecommendation?>(null) }
-    var isProcessing by remember { mutableStateOf(false) }
+    val isProcessing = homeUiState.isProcessing
 
     var showAutoPublishSettingsDialog by remember { mutableStateOf(false) }
-    val autoPublishConfig by repository.autoPublishConfig.collectAsState()
+    val autoPublishConfig by repository.autoPublishConfig.collectAsStateWithLifecycle()
     var autoPublishDialogData by remember { mutableStateOf<Pair<Clip, AutoPublishResult>?>(null) }
+
+    LaunchedEffect(homeUiState.completedProjectId) {
+        val projectId = homeUiState.completedProjectId ?: return@LaunchedEffect
+        Toast.makeText(context, "تم توليد المقاطع بنجاح عبر الذكاء الاصطناعي!", Toast.LENGTH_SHORT).show()
+        if (autoPublishConfig.isEnabled) {
+            repository.enqueueAutoPublishForNewProject(projectId)
+            Toast.makeText(context, "تمت جدولة النشر التلقائي في الخلفية.", Toast.LENGTH_SHORT).show()
+        }
+        onProjectCreated(projectId)
+        homeViewModel.consumeCompletedProject()
+    }
+
+    LaunchedEffect(homeUiState.errorMessage) {
+        homeUiState.errorMessage?.let { message ->
+            Toast.makeText(context, "خطأ: $message", Toast.LENGTH_LONG).show()
+            homeViewModel.consumeError()
+        }
+    }
 
     if (showAutoPublishSettingsDialog) {
         AutoPublishSettingsDialog(
@@ -601,55 +621,20 @@ fun HomeScreen(
                                 Toast.makeText(context, "تم اختيار الفيديو: ${videoData.fileName}", Toast.LENGTH_SHORT).show()
                             },
                             onStartProcessing = { videoData ->
-                                isProcessing = true
-                                coroutineScope.launch {
-                                    try {
-                                        val tTitle = videoData.fileName
-                                        val tPrompt = "فيديو محلي من المعرض: ${videoData.fileName} بدقة ${videoData.width}x${videoData.height}"
-                                        val tDurMin = (videoData.durationMs / 60000).toInt().coerceAtLeast(1)
-
-                                        var cTheme = selectedCaptionTheme
-                                        var pPlatform = selectedPlatform
-
-                                        if (autoDetectAiTemplate) {
-                                            try {
-                                                val aiRec = repository.determineOptimalTemplate(
-                                                    title = tTitle,
-                                                    transcript = tPrompt,
-                                                    durationSec = (videoData.durationMs / 1000).toInt().coerceAtLeast(30)
-                                                )
-                                                cTheme = aiRec.recommendedCaptionTheme
-                                                pPlatform = aiRec.recommendedPlatform
-                                            } catch (_: Exception) {}
-                                        }
-
-                                        val newProjectId = repository.processNewVideo(
-                                            title = tTitle,
-                                            sourceUrl = videoData.uri.toString(),
-                                            transcriptOrPrompt = tPrompt,
-                                            durationMinutes = tDurMin,
-                                            targetPlatform = pPlatform,
-                                            captionTheme = cTheme
-                                        )
-                                        isProcessing = false
-                                        Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Gemini AI!", Toast.LENGTH_SHORT).show()
-
-                                        if (autoPublishConfig.isEnabled) {
-                                            val publishRes = repository.dispatchAutoPublishForNewProject(newProjectId, context)
-                                            val bestClip = repository.getBestClipForProject(newProjectId)
-                                            if (publishRes != null && bestClip != null) {
-                                                autoPublishDialogData = Pair(bestClip, publishRes)
-                                            } else {
-                                                onProjectCreated(newProjectId)
-                                            }
-                                        } else {
-                                            onProjectCreated(newProjectId)
-                                        }
-                                    } catch (e: Exception) {
-                                        isProcessing = false
-                                        Toast.makeText(context, "خطأ: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                                    }
-                                }
+                                val title = videoData.fileName
+                                val prompt = "فيديو محلي من المعرض: ${videoData.fileName} بدقة ${videoData.width}x${videoData.height}"
+                                val duration = (videoData.durationMs / 60000).toInt().coerceAtLeast(1)
+                                homeViewModel.startProcessing(
+                                    input = VideoProcessingInput(
+                                        title = title,
+                                        sourceUrl = videoData.uri.toString(),
+                                        transcriptOrPrompt = prompt,
+                                        durationMinutes = duration,
+                                        targetPlatform = selectedPlatform,
+                                        captionTheme = selectedCaptionTheme
+                                    ),
+                                    autoDetectAiTemplate = autoDetectAiTemplate
+                                )
                             },
                             isProcessing = isProcessing
                         )
@@ -960,9 +945,7 @@ fun HomeScreen(
                                 Switch(
                                     checked = autoPublishConfig.isEnabled,
                                     onCheckedChange = { isChecked ->
-                                        coroutineScope.launch {
-                                            repository.saveAutoPublishConfig(autoPublishConfig.copy(isEnabled = isChecked))
-                                        }
+                                        homeViewModel.setAutoPublishEnabled(autoPublishConfig, isChecked)
                                     },
                                     colors = SwitchDefaults.colors(
                                         checkedThumbColor = Color.White,
@@ -982,62 +965,22 @@ fun HomeScreen(
                                     Toast.makeText(context, "الرجاء إدخال رابط أو نص لبدء التوليد", Toast.LENGTH_SHORT).show()
                                     return@Button
                                 }
-
-                                isProcessing = true
-                                coroutineScope.launch {
-                                    val targetTitle = videoTitle.trim().ifBlank {
-                                        videoUrl.trim().takeLast(12).takeIf { it.isNotBlank() }
-                                            ?: transcriptPrompt.trim().lineSequence().firstOrNull()?.take(80)
-                                            ?: "فيديو جديد"
-                                    }
-                                    val targetUrl = videoUrl.trim()
-                                    val targetPrompt = transcriptPrompt.trim()
-
-                                    try {
-                                        var effectiveCaptionTheme = selectedCaptionTheme
-                                        var effectivePlatform = selectedPlatform
-
-                                        if (autoDetectAiTemplate) {
-                                            try {
-                                                val aiRec = repository.determineOptimalTemplate(
-                                                    title = targetTitle,
-                                                    transcript = targetPrompt,
-                                                    durationSec = durationMinutes * 60
-                                                )
-                                                detectedRecommendation = aiRec
-                                                effectiveCaptionTheme = aiRec.recommendedCaptionTheme
-                                                effectivePlatform = aiRec.recommendedPlatform
-                                            } catch (_: Exception) {}
-                                        }
-
-                                        val newProjectId = repository.processNewVideo(
-                                            title = targetTitle,
-                                            sourceUrl = targetUrl,
-                                            transcriptOrPrompt = targetPrompt,
-                                            durationMinutes = durationMinutes,
-                                            targetPlatform = effectivePlatform,
-                                            captionTheme = effectiveCaptionTheme
-                                        )
-                                        isProcessing = false
-                                        Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Google Flow!", Toast.LENGTH_SHORT).show()
-
-                                        // Check if Auto-Publish is active
-                                        if (autoPublishConfig.isEnabled) {
-                                            val publishRes = repository.dispatchAutoPublishForNewProject(newProjectId, context)
-                                            val bestClip = repository.getBestClipForProject(newProjectId)
-                                            if (publishRes != null && bestClip != null) {
-                                                autoPublishDialogData = Pair(bestClip, publishRes)
-                                            } else {
-                                                onProjectCreated(newProjectId)
-                                            }
-                                        } else {
-                                            onProjectCreated(newProjectId)
-                                        }
-                                    } catch (e: Exception) {
-                                        isProcessing = false
-                                        Toast.makeText(context, "خطأ: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                                    }
+                                val targetTitle = videoTitle.trim().ifBlank {
+                                    videoUrl.trim().takeLast(12).takeIf { it.isNotBlank() }
+                                        ?: transcriptPrompt.trim().lineSequence().firstOrNull()?.take(80)
+                                        ?: "فيديو جديد"
                                 }
+                                homeViewModel.startProcessing(
+                                    input = VideoProcessingInput(
+                                        title = targetTitle,
+                                        sourceUrl = videoUrl.trim(),
+                                        transcriptOrPrompt = transcriptPrompt.trim(),
+                                        durationMinutes = durationMinutes,
+                                        targetPlatform = selectedPlatform,
+                                        captionTheme = selectedCaptionTheme
+                                    ),
+                                    autoDetectAiTemplate = autoDetectAiTemplate
+                                )
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1084,71 +1027,6 @@ fun HomeScreen(
             }
         }
 
-        // Device Gallery Video Picker Section (Replacing Static Presets UI)
-        item {
-            DeviceGalleryVideoPicker(
-                onVideoSelected = { videoData ->
-                    videoTitle = videoData.fileName
-                    val durMin = (videoData.durationMs / 60000).toInt().coerceAtLeast(1)
-                    durationMinutes = durMin
-                    transcriptPrompt = "تحليل فيديو محلي: ${videoData.fileName} بدقة ${videoData.width}x${videoData.height} وحجم ${videoData.fileSizeBytes / (1024 * 1024)}MB"
-                    Toast.makeText(context, "تم اختيار الفيديو: ${videoData.fileName}", Toast.LENGTH_SHORT).show()
-                },
-                onStartProcessing = { videoData ->
-                    isProcessing = true
-                    coroutineScope.launch {
-                        try {
-                            val tTitle = videoData.fileName
-                            val tPrompt = "فيديو محلي من المعرض: ${videoData.fileName} بدقة ${videoData.width}x${videoData.height}"
-                            val tDurMin = (videoData.durationMs / 60000).toInt().coerceAtLeast(1)
-
-                            var cTheme = selectedCaptionTheme
-                            var pPlatform = selectedPlatform
-
-                            if (autoDetectAiTemplate) {
-                                try {
-                                    val aiRec = repository.determineOptimalTemplate(
-                                        title = tTitle,
-                                        transcript = tPrompt,
-                                        durationSec = (videoData.durationMs / 1000).toInt().coerceAtLeast(30)
-                                    )
-                                    cTheme = aiRec.recommendedCaptionTheme
-                                    pPlatform = aiRec.recommendedPlatform
-                                } catch (_: Exception) {}
-                            }
-
-                            val newProjectId = repository.processNewVideo(
-                                title = tTitle,
-                                sourceUrl = videoData.uri.toString(),
-                                transcriptOrPrompt = tPrompt,
-                                durationMinutes = tDurMin,
-                                targetPlatform = pPlatform,
-                                captionTheme = cTheme
-                            )
-                            isProcessing = false
-                            Toast.makeText(context, "تم توليد المقاطع بنجاح عبر Gemini AI!", Toast.LENGTH_SHORT).show()
-
-                            if (autoPublishConfig.isEnabled) {
-                                val publishRes = repository.dispatchAutoPublishForNewProject(newProjectId, context)
-                                val bestClip = repository.getBestClipForProject(newProjectId)
-                                if (publishRes != null && bestClip != null) {
-                                    autoPublishDialogData = Pair(bestClip, publishRes)
-                                } else {
-                                    onProjectCreated(newProjectId)
-                                }
-                            } else {
-                                onProjectCreated(newProjectId)
-                            }
-                        } catch (e: Exception) {
-                            isProcessing = false
-                            Toast.makeText(context, "خطأ: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
-                        }
-                    }
-                },
-                isProcessing = isProcessing
-            )
-        }
-
         // Recent Projects Section: render only when real Room data exists.
         if (allProjects.isNotEmpty()) {
             item {
@@ -1188,6 +1066,9 @@ fun HomeScreen(
 
 @Composable
 private fun ProcessingPipelineCard(step: ProcessingStep) {
+    val totalSteps = ProcessingStep.Completed.stepNumber.coerceAtLeast(1)
+    val progress = (step.stepNumber.toFloat() / totalSteps).coerceIn(0f, 1f)
+
     Card(
         modifier = Modifier.fillMaxWidth().testTag("pipeline_progress_card"),
         shape = RoundedCornerShape(14.dp),
@@ -1208,7 +1089,7 @@ private fun ProcessingPipelineCard(step: ProcessingStep) {
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "الخطوة ${step.stepNumber}/4: ${step.title}",
+                        text = "الخطوة ${step.stepNumber}/$totalSteps: ${step.title}",
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontWeight = FontWeight.Bold,
                             color = OpusTextPrimary
@@ -1216,7 +1097,7 @@ private fun ProcessingPipelineCard(step: ProcessingStep) {
                     )
                 }
                 Text(
-                    text = "${step.stepNumber * 25}%",
+                    text = "${(progress * 100).toInt()}%",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = OpusElectricCyan
@@ -1234,7 +1115,7 @@ private fun ProcessingPipelineCard(step: ProcessingStep) {
             Spacer(modifier = Modifier.height(8.dp))
 
             LinearProgressIndicator(
-                progress = { step.stepNumber / 4f },
+                progress = { progress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp)

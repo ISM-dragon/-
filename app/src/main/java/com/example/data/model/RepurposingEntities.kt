@@ -99,3 +99,18 @@ data class RepurposingHistoryEntity(
     val details: String = "",
     val timestamp: Long = System.currentTimeMillis()
 )
+
+/** Durable input for a background video-processing job. */
+@Entity(tableName = "processing_requests")
+@JsonClass(generateAdapter = true)
+data class ProcessingRequestEntity(
+    @PrimaryKey val requestId: String,
+    val title: String,
+    val sourceUrl: String,
+    val transcriptOrPrompt: String,
+    val durationMinutes: Int,
+    val targetPlatform: String,
+    val captionTheme: String,
+    val layoutType: String,
+    val createdAt: Long = System.currentTimeMillis()
+)

@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.paging.PagingSource
 import com.example.data.model.Project
 import kotlinx.coroutines.flow.Flow
 
@@ -13,6 +14,9 @@ import kotlinx.coroutines.flow.Flow
 interface ProjectDao {
     @Query("SELECT * FROM projects ORDER BY createdAt DESC")
     fun getAllProjects(): Flow<List<Project>>
+
+    @Query("SELECT * FROM projects WHERE title LIKE '%' || :query || '%' ORDER BY createdAt DESC")
+    fun pagingProjects(query: String): PagingSource<Int, Project>
 
     @Query("SELECT * FROM projects WHERE id = :id")
     fun getProjectById(id: Long): Flow<Project?>

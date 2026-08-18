@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -100,7 +101,7 @@ fun ClipStudioScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val allClips by repository.allClips.collectAsState(initial = emptyList())
+    val allClips by repository.allClips.collectAsStateWithLifecycle(initialValue = emptyList())
 
     val displayedClips = remember(allClips, initialProjectId) {
         if (initialProjectId != null && initialProjectId > 0) {
@@ -230,8 +231,11 @@ fun ClipStudioScreen(
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(displayedClips.indices.toList()) { index ->
-                    val clip = displayedClips[index]
+                items(
+                    items = displayedClips,
+                    key = { it.id }
+                ) { clip ->
+                    val index = displayedClips.indexOfFirst { it.id == clip.id }
                     val isSelected = activeClip?.id == clip.id
                     val scoreColor = if (clip.viralityScore >= 90) OpusViralEmerald else OpusElectricCyan
 

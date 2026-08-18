@@ -8,6 +8,8 @@ import com.example.data.model.ClipGenerationData
 import com.example.data.model.GoogleFlowCreditInfo
 import com.example.data.model.SocialPostCopy
 import com.example.data.model.ViralityAnalysisResult
+import com.example.data.repository.ProcessingStep
+import com.example.ui.screens.VideoProcessingInput
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -59,6 +61,7 @@ class OpusArchitectureCoreTest {
             name = "OpenAI GPT-4o Mini",
             providerType = AiProviderType.OPENAI.name,
             apiKey = "sk-test-12345678",
+            isEnabled = true,
             totalCreditsAllocated = 20.0,
             usedCredits = 5.0
         )
@@ -142,6 +145,34 @@ class OpusArchitectureCoreTest {
         assertEquals("Never", deserialized?.get(0)?.word)
         assertTrue(deserialized?.get(0)?.isHighlight == true)
         assertEquals("🚀", deserialized?.get(2)?.emoji)
+    }
+
+    @Test
+    fun testProcessingStepsAreMonotonic() {
+        val steps = listOf(
+            ProcessingStep.Idle,
+            ProcessingStep.Transcribing,
+            ProcessingStep.ScanningHooks,
+            ProcessingStep.CalculatingScores,
+            ProcessingStep.StylingCaptions,
+            ProcessingStep.Completed
+        )
+        assertEquals(listOf(0, 1, 2, 3, 4, 5), steps.map { it.stepNumber })
+        assertTrue(steps.zipWithNext().all { (current, next) -> current.stepNumber < next.stepNumber })
+    }
+
+    @Test
+    fun testVideoProcessingInputKeepsLayoutIndependentFromPlatform() {
+        val input = VideoProcessingInput(
+            title = "Demo",
+            sourceUrl = "https://example.com/video",
+            transcriptOrPrompt = "Transcript",
+            durationMinutes = 5,
+            targetPlatform = "YouTube Shorts",
+            captionTheme = "Opus Neon"
+        )
+        assertEquals("YouTube Shorts", input.targetPlatform)
+        assertEquals("9:16 Full Screen", input.layoutType)
     }
 
     @Test

@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.paging.PagingSource
 import com.example.data.model.Clip
 import kotlinx.coroutines.flow.Flow
 
@@ -23,6 +24,9 @@ interface ClipDao {
     @Query("SELECT * FROM clips WHERE isFavorite = 1 ORDER BY viralityScore DESC")
     fun getFavoriteClips(): Flow<List<Clip>>
 
+    @Query("SELECT * FROM clips WHERE isFavorite = 1 AND title LIKE '%' || :query || '%' ORDER BY viralityScore DESC")
+    fun pagingFavoriteClips(query: String): PagingSource<Int, Clip>
+
     @Query("SELECT * FROM clips ORDER BY viralityScore DESC")
     fun getAllClips(): Flow<List<Clip>>
 
@@ -30,7 +34,7 @@ interface ClipDao {
     suspend fun insertClip(clip: Clip): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertClips(clips: List<Clip>)
+    suspend fun insertClips(clips: List<Clip>): List<Long>
 
     @Update
     suspend fun updateClip(clip: Clip)

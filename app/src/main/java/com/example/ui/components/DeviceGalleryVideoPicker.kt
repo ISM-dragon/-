@@ -78,6 +78,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.media.VideoMetadataReader
 import com.example.ui.theme.OpusBorder
 import com.example.ui.theme.OpusDarkSurface
 import com.example.ui.theme.OpusDarkSurfaceHighlight
@@ -665,44 +666,18 @@ private suspend fun extractVideoMetadataInternal(
     context: Context,
     uri: Uri,
     onResult: (name: String, size: Long, duration: Long, width: Int, height: Int, thumbnail: Bitmap?) -> Unit
-) = withContext(Dispatchers.IO) {
-    var fileName = "video.mp4"
-    var fileSize = 0L
-
-    try {
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-            if (cursor.moveToFirst()) {
-                if (nameIndex != -1) fileName = cursor.getString(nameIndex) ?: "video.mp4"
-                if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
-            }
-        }
-    } catch (_: Exception) {}
-
-    var durationMs = 0L
-    var width = 0
-    var height = 0
-    var bitmap: Bitmap? = null
-
-    try {
-        val retriever = MediaMetadataRetriever()
-        retriever.setDataSource(context, uri)
-        val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-        durationMs = durStr?.toLongOrNull() ?: 0L
-
-        val wStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-        val hStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-        width = wStr?.toIntOrNull() ?: 0
-        height = hStr?.toIntOrNull() ?: 0
-
-        bitmap = retriever.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            ?: retriever.frameAtTime
-        retriever.release()
-    } catch (_: Exception) {}
-
+) {
+    val metadata = runCatching { VideoMetadataReader.read(context, uri) }
+        .getOrDefault(com.example.media.VideoMetadata())
     withContext(Dispatchers.Main) {
-        onResult(fileName, fileSize, durationMs, width, height, bitmap)
+        onResult(
+            metadata.fileName,
+            metadata.fileSize,
+            metadata.durationMs,
+            metadata.width,
+            metadata.height,
+            metadata.thumbnail
+        )
     }
 }
 

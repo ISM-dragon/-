@@ -65,6 +65,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -99,6 +100,7 @@ import com.example.ui.components.AutoPublishResultDialog
 import com.example.ui.components.AutoPublishSettingsDialog
 import com.example.ui.components.CaptionPresetsList
 import com.example.ui.components.VideoProcessingLoadingDialog
+import com.example.media.VideoMetadataReader
 import com.example.ui.theme.OpusBorder
 import com.example.ui.theme.OpusDarkCanvas
 import com.example.ui.theme.OpusDarkSurface
@@ -128,7 +130,7 @@ fun VideoUploadScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val processingStep by repository.processingStep.collectAsState()
+    val processingStep by repository.processingStep.collectAsStateWithLifecycle()
 
     var selectedVideoUri by remember { mutableStateOf<Uri?>(null) }
     var fileName by remember { mutableStateOf<String?>(null) }
@@ -147,7 +149,7 @@ fun VideoUploadScreen(
     var detectedAiRecommendation by remember { mutableStateOf<AiTemplateRecommendation?>(null) }
 
     var showAutoPublishSettingsDialog by remember { mutableStateOf(false) }
-    val autoPublishConfig by repository.autoPublishConfig.collectAsState()
+    val autoPublishConfig by repository.autoPublishConfig.collectAsStateWithLifecycle()
     var autoPublishDialogData by remember { mutableStateOf<Pair<Clip, AutoPublishResult>?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
 
@@ -900,6 +902,7 @@ fun VideoUploadScreen(
                             try {
                                 var appliedCaptionTheme = selectedCaptionTheme
                                 var appliedLayout = selectedLayout
+                                var appliedPlatform = "TikTok & Reels (9:16)"
 
                                 if (autoDetectAiTemplate) {
                                     try {
@@ -910,7 +913,8 @@ fun VideoUploadScreen(
                                         )
                                         detectedAiRecommendation = aiRec
                                         appliedCaptionTheme = aiRec.recommendedCaptionTheme
-                                        appliedLayout = aiRec.recommendedPlatform
+                                        appliedLayout = aiRec.recommendedLayout
+                                        appliedPlatform = aiRec.recommendedPlatform
                                     } catch (_: Exception) {}
                                 }
 
@@ -919,8 +923,9 @@ fun VideoUploadScreen(
                                     sourceUrl = selectedVideoUri.toString(),
                                     transcriptOrPrompt = "Local uploaded video: $videoTitle",
                                     durationMinutes = calcDurationMin,
-                                    targetPlatform = appliedLayout,
-                                    captionTheme = appliedCaptionTheme
+                                    targetPlatform = appliedPlatform,
+                                    captionTheme = appliedCaptionTheme,
+                                    layoutType = appliedLayout
                                 )
                                 isProcessing = false
                                 Toast.makeText(context, "تم استخراج المقاطع بنجاح عبر Gemini AI!", Toast.LENGTH_SHORT).show()
@@ -1136,57 +1141,18 @@ private suspend fun extractVideoMetadata(
     context: Context,
     uri: Uri,
     onResult: (name: String, size: Long, duration: Long, width: Int, height: Int, thumbnail: Bitmap?) -> Unit
-) = withContext(Dispatchers.IO) {
-    var fileName = "video_${System.currentTimeMillis()}.mp4"
-    var fileSize = 0L
-
-    // Query ContentResolver for display name and file size
-    try {
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                if (nameIndex != -1) {
-                    val name = cursor.getString(nameIndex)
-                    if (!name.isNullOrBlank()) fileName = name
-                }
-                if (sizeIndex != -1) {
-                    fileSize = cursor.getLong(sizeIndex)
-                }
-            }
-        }
-    } catch (_: Exception) {}
-
-    var duration = 0L
-    var width = 0
-    var height = 0
-    var thumbnail: Bitmap? = null
-
-    // Extract frame & dimensions using MediaMetadataRetriever
-    val retriever = MediaMetadataRetriever()
-    try {
-        retriever.setDataSource(context, uri)
-        val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-        duration = durationStr?.toLongOrNull() ?: 0L
-
-        val widthStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-        width = widthStr?.toIntOrNull() ?: 0
-
-        val heightStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-        height = heightStr?.toIntOrNull() ?: 0
-
-        // Extract frame at 1-second mark (or 0)
-        thumbnail = retriever.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            ?: retriever.frameAtTime
-    } catch (_: Exception) {
-    } finally {
-        try {
-            retriever.release()
-        } catch (_: Exception) {}
-    }
-
+) {
+    val metadata = runCatching { VideoMetadataReader.read(context, uri) }
+        .getOrDefault(com.example.media.VideoMetadata(fileName = "video_${System.currentTimeMillis()}.mp4"))
     withContext(Dispatchers.Main) {
-        onResult(fileName, fileSize, duration, width, height, thumbnail)
+        onResult(
+            metadata.fileName,
+            metadata.fileSize,
+            metadata.durationMs,
+            metadata.width,
+            metadata.height,
+            metadata.thumbnail
+        )
     }
 }
 

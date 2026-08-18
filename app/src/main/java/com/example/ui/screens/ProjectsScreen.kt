@@ -49,6 +49,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +66,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.compose.collectAsLazyPagingItems
 import com.example.data.model.Clip
 import com.example.data.model.Project
 import com.example.data.model.RepurposingHistoryEntity
@@ -84,6 +87,7 @@ import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
 import com.example.ui.theme.OpusViralEmerald
 import com.example.ui.theme.OpusVioletGlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -97,30 +101,20 @@ fun ProjectsScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val allProjects by repository.allProjects.collectAsState(initial = emptyList())
-    val favoriteClips by repository.favoriteClips.collectAsState(initial = emptyList())
-    val historyList by repository.repurposingHistory.collectAsState(initial = emptyList())
-    val cachedMetadataList by repository.cachedVideoMetadata.collectAsState(initial = emptyList())
-    val viralScoreMetricsList by repository.topViralScoreMetrics.collectAsState(initial = emptyList())
-    val totalTimeSaved by repository.totalTimeSavedMinutes.collectAsState(initial = 0)
+    val cachedMetadataList by repository.cachedVideoMetadata.collectAsStateWithLifecycle(initialValue = emptyList())
+    val viralScoreMetricsList by repository.topViralScoreMetrics.collectAsStateWithLifecycle(initialValue = emptyList())
+    val totalTimeSaved by repository.totalTimeSavedMinutes.collectAsStateWithLifecycle(initialValue = 0)
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
-
-    val filteredProjects = remember(allProjects, searchQuery) {
-        if (searchQuery.isBlank()) allProjects
-        else allProjects.filter { it.title.contains(searchQuery, ignoreCase = true) }
+    var debouncedQuery by remember { mutableStateOf("") }
+    LaunchedEffect(searchQuery) {
+        delay(300)
+        debouncedQuery = searchQuery
     }
-
-    val filteredFavorites = remember(favoriteClips, searchQuery) {
-        if (searchQuery.isBlank()) favoriteClips
-        else favoriteClips.filter { it.title.contains(searchQuery, ignoreCase = true) }
-    }
-
-    val filteredHistory = remember(historyList, searchQuery) {
-        if (searchQuery.isBlank()) historyList
-        else historyList.filter { it.videoTitle.contains(searchQuery, ignoreCase = true) || it.actionType.contains(searchQuery, ignoreCase = true) }
-    }
+    val pagedProjects = remember(repository, debouncedQuery) { repository.pagedProjects(debouncedQuery) }.collectAsLazyPagingItems()
+    val pagedFavorites = remember(repository, debouncedQuery) { repository.pagedFavoriteClips(debouncedQuery) }.collectAsLazyPagingItems()
+    val pagedHistory = remember(repository, debouncedQuery) { repository.pagedHistory(debouncedQuery) }.collectAsLazyPagingItems()
 
     val dateFormatter = remember { SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()) }
 
@@ -195,7 +189,7 @@ fun ProjectsScreen(
                     onClick = { selectedTab = 0 },
                     text = {
                         Text(
-                            text = "Projects (${filteredProjects.size})",
+                            text = "Projects (${pagedProjects.itemCount})",
                             fontSize = 11.sp,
                             fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Medium,
                             color = if (selectedTab == 0) OpusElectricCyan else OpusTextSecondary
@@ -208,7 +202,7 @@ fun ProjectsScreen(
                     onClick = { selectedTab = 1 },
                     text = {
                         Text(
-                            text = "Favorites (${filteredFavorites.size})",
+                            text = "Favorites (${pagedFavorites.itemCount})",
                             fontSize = 11.sp,
                             fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Medium,
                             color = if (selectedTab == 1) OpusHotPink else OpusTextSecondary
@@ -221,7 +215,7 @@ fun ProjectsScreen(
                     onClick = { selectedTab = 2 },
                     text = {
                         Text(
-                            text = "History & Cache (${historyList.size})",
+                            text = "History & Cache (${pagedHistory.itemCount})",
                             fontSize = 11.sp,
                             fontWeight = if (selectedTab == 2) FontWeight.Bold else FontWeight.Medium,
                             color = if (selectedTab == 2) OpusViralEmerald else OpusTextSecondary
@@ -233,7 +227,7 @@ fun ProjectsScreen(
         }
 
         if (selectedTab == 0) {
-            if (filteredProjects.isEmpty()) {
+            if (pagedProjects.itemCount == 0) {
                 item {
                     Box(
                         modifier = Modifier
@@ -245,7 +239,11 @@ fun ProjectsScreen(
                     }
                 }
             } else {
-                items(filteredProjects) { project ->
+                items(
+                    count = pagedProjects.itemCount,
+                    key = { index -> pagedProjects[index]?.id ?: index.toLong() }
+                ) { index ->
+                    val project = pagedProjects[index] ?: return@items
                     ProjectCard(
                         project = project,
                         onOpen = { onOpenProjectClips(project.id) },
@@ -259,7 +257,7 @@ fun ProjectsScreen(
                 }
             }
         } else if (selectedTab == 1) {
-            if (filteredFavorites.isEmpty()) {
+            if (pagedFavorites.itemCount == 0) {
                 item {
                     Box(
                         modifier = Modifier
@@ -271,7 +269,11 @@ fun ProjectsScreen(
                     }
                 }
             } else {
-                items(filteredFavorites) { clip ->
+                items(
+                    count = pagedFavorites.itemCount,
+                    key = { index -> pagedFavorites[index]?.id ?: index.toLong() }
+                ) { index ->
+                    val clip = pagedFavorites[index] ?: return@items
                     FavoriteClipCard(
                         clip = clip,
                         onOpen = { onOpenProjectClips(clip.projectId) }
@@ -407,7 +409,7 @@ fun ProjectsScreen(
                     Icon(imageVector = Icons.Default.History, contentDescription = "History", tint = OpusElectricCyan, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "User Repurposing Activity (${filteredHistory.size})",
+                        text = "User Repurposing Activity (${pagedHistory.itemCount})",
                         fontWeight = FontWeight.Bold,
                         color = OpusTextPrimary,
                         fontSize = 13.sp
@@ -415,12 +417,16 @@ fun ProjectsScreen(
                 }
             }
 
-            if (filteredHistory.isEmpty()) {
+            if (pagedHistory.itemCount == 0) {
                 item {
                     Text(text = "No history records found.", color = OpusTextSecondary, fontSize = 12.sp)
                 }
             } else {
-                items(filteredHistory) { history ->
+                items(
+                    count = pagedHistory.itemCount,
+                    key = { index -> pagedHistory[index]?.id ?: index.toLong() }
+                ) { index ->
+                    val history = pagedHistory[index] ?: return@items
                     HistoryItemCard(
                         history = history,
                         dateString = dateFormatter.format(Date(history.timestamp)),
@@ -454,7 +460,10 @@ fun ProjectsScreen(
                     Text(text = "No cached video metadata yet.", color = OpusTextSecondary, fontSize = 12.sp)
                 }
             } else {
-                items(cachedMetadataList) { cacheEntry ->
+                items(
+                    items = cachedMetadataList,
+                    key = { it.id }
+                ) { cacheEntry ->
                     CachedMetadataCard(cacheEntry = cacheEntry)
                 }
             }
@@ -479,7 +488,10 @@ fun ProjectsScreen(
                     Text(text = "No viral score metrics evaluated yet.", color = OpusTextSecondary, fontSize = 12.sp)
                 }
             } else {
-                items(viralScoreMetricsList) { metric ->
+                items(
+                    items = viralScoreMetricsList,
+                    key = { it.id }
+                ) { metric ->
                     ViralMetricCard(metric = metric)
                 }
             }

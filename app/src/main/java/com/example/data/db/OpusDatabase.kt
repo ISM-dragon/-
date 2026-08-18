@@ -4,8 +4,11 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.model.Clip
 import com.example.data.model.Project
+import com.example.data.model.ProcessingRequestEntity
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
@@ -16,9 +19,10 @@ import com.example.data.model.ViralScoreMetricEntity
         Clip::class,
         VideoProcessingCacheEntity::class,
         ViralScoreMetricEntity::class,
-        RepurposingHistoryEntity::class
+        RepurposingHistoryEntity::class,
+        ProcessingRequestEntity::class
     ],
-    version = 2,
+    version = 4,
     exportSchema = false
 )
 abstract class OpusDatabase : RoomDatabase() {
@@ -27,6 +31,7 @@ abstract class OpusDatabase : RoomDatabase() {
     abstract fun videoProcessingCacheDao(): VideoProcessingCacheDao
     abstract fun viralScoreMetricDao(): ViralScoreMetricDao
     abstract fun repurposingHistoryDao(): RepurposingHistoryDao
+    abstract fun processingRequestDao(): ProcessingRequestDao
 
     companion object {
         @Volatile
@@ -39,10 +44,40 @@ abstract class OpusDatabase : RoomDatabase() {
                     OpusDatabase::class.java,
                     "opus_pro_database"
                 )
-                .fallbackToDestructiveMigration()
-                .build()
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                    .build()
                 INSTANCE = instance
                 instance
+            }
+        }
+
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS processing_requests (
+                        requestId TEXT NOT NULL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        sourceUrl TEXT NOT NULL,
+                        transcriptOrPrompt TEXT NOT NULL,
+                        durationMinutes INTEGER NOT NULL,
+                        targetPlatform TEXT NOT NULL,
+                        captionTheme TEXT NOT NULL,
+                        layoutType TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_projects_createdAt ON projects(createdAt)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_projects_status ON projects(status)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_clips_projectId ON clips(projectId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_clips_isFavorite ON clips(isFavorite)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_clips_viralityScore ON clips(viralityScore)")
             }
         }
     }

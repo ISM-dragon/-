@@ -61,6 +61,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -106,7 +107,7 @@ fun ClipCompetitorComparisonScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val allClips by repository.allClips.collectAsState(initial = emptyList())
+    val allClips by repository.allClips.collectAsStateWithLifecycle(initialValue = emptyList())
 
     var selectedClipId by remember {
         mutableStateOf(initialClipId ?: allClips.firstOrNull()?.id ?: 0L)

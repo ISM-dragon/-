@@ -14,6 +14,7 @@ import com.example.data.model.DirectPlatformApiCredentials
 import com.example.data.model.SocialPostCopy
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -31,12 +32,14 @@ class GeminiClipService {
         .build()
 
     private val okHttpClient = OkHttpClient.Builder()
+        .addInterceptor(RetryInterceptor())
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
     var customApiKey: String? = null
+    var allowLocalDemoFallback: Boolean = true
 
     suspend fun testProviderConnection(provider: AiProviderConfig): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val trimmedKey = provider.apiKey.trim()
@@ -61,6 +64,7 @@ class GeminiClipService {
                     val request = Request.Builder()
                         .url("https://generativelanguage.googleapis.com/v1beta/models/$modelToUse:generateContent?key=$trimmedKey")
                         .post(body)
+                        .addHeader(RetryInterceptor.RETRYABLE_HEADER, "true")
                         .build()
 
                     val response = okHttpClient.newCall(request).execute()
@@ -96,6 +100,7 @@ class GeminiClipService {
                         .url("https://api.anthropic.com/v1/messages")
                         .post(body)
                         .addHeader("Content-Type", "application/json")
+                        .addHeader(RetryInterceptor.RETRYABLE_HEADER, "true")
                         .addHeader("x-api-key", trimmedKey)
                         .addHeader("anthropic-version", "2023-06-01")
                         .build()
@@ -152,6 +157,7 @@ class GeminiClipService {
                         .url(endpointUrl)
                         .post(body)
                         .addHeader("Content-Type", "application/json")
+                        .addHeader(RetryInterceptor.RETRYABLE_HEADER, "true")
                         .addHeader("Authorization", "Bearer $trimmedKey")
 
                     if (provider.providerType == AiProviderType.OPENROUTER.name) {
@@ -175,6 +181,8 @@ class GeminiClipService {
                     }
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             Pair(false, e.localizedMessage ?: "Connection failed. Please check network.")
         }
@@ -220,6 +228,7 @@ class GeminiClipService {
                     val request = Request.Builder()
                         .url("https://generativelanguage.googleapis.com/v1beta/models/$modelToUse:generateContent?key=$apiKey")
                         .post(body)
+                        .addHeader(RetryInterceptor.RETRYABLE_HEADER, "true")
                         .build()
 
                     val response = okHttpClient.newCall(request).execute()
@@ -234,7 +243,7 @@ class GeminiClipService {
                             return@withContext parts?.getJSONObject(0)?.optString("text")
                         }
                     } else {
-                        Log.w("GeminiClipService", "Gemini provider ${provider.name} failed with code ${response.code}: $responseBody")
+                        Log.w("GeminiClipService", "Gemini provider ${provider.name} failed with code ${response.code}: ${summarizeResponse(responseBody)}")
                     }
                 }
                 AiProviderType.ANTHROPIC.name -> {
@@ -270,7 +279,7 @@ class GeminiClipService {
                             return@withContext contentArr.getJSONObject(0).optString("text")
                         }
                     } else {
-                        Log.w("GeminiClipService", "Anthropic provider ${provider.name} failed with code ${response.code}: $responseBody")
+                        Log.w("GeminiClipService", "Anthropic provider ${provider.name} failed with code ${response.code}: ${summarizeResponse(responseBody)}")
                     }
                 }
                 else -> {
@@ -312,6 +321,7 @@ class GeminiClipService {
                         .url(endpointUrl)
                         .post(body)
                         .addHeader("Content-Type", "application/json")
+                        .addHeader(RetryInterceptor.RETRYABLE_HEADER, "true")
                         .addHeader("Authorization", "Bearer $apiKey")
 
                     if (provider.providerType == AiProviderType.OPENROUTER.name) {
@@ -330,10 +340,12 @@ class GeminiClipService {
                             return@withContext msg?.optString("content")
                         }
                     } else {
-                        Log.w("GeminiClipService", "OpenAI-compatible provider ${provider.name} failed with code ${response.code}: $responseBody")
+                        Log.w("GeminiClipService", "OpenAI-compatible provider ${provider.name} failed with code ${response.code}: ${summarizeResponse(responseBody)}")
                     }
                 }
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             Log.e("GeminiClipService", "Error executing request with provider ${provider.name}: ${e.message}")
         }
@@ -441,6 +453,9 @@ class GeminiClipService {
             }
         }
 
+        if (!allowLocalDemoFallback) {
+            throw IllegalStateException("No AI provider returned valid clip data; local demo fallback is disabled.")
+        }
         return@withContext generatePrecomputedRealisticClips(title, transcriptOrPrompt)
     }
 
@@ -1169,6 +1184,18 @@ class GeminiClipService {
         captionText: String,
         credentials: DirectPlatformApiCredentials
     ): DirectApiPublishLog = withContext(Dispatchers.IO) {
+        if (!credentials.isDirectApiEnabled) {
+            return@withContext DirectApiPublishLog(
+                platform = platform,
+                isSuccess = false,
+                httpCode = 0,
+                endpointUrl = "",
+                responseSummary = "Direct API publishing is disabled in settings.",
+                postUrl = "",
+                rawPayload = ""
+            )
+        }
+
         val endpointUrl = when (platform) {
             "YouTube Shorts" -> "https://www.googleapis.com/youtube/v3/videos"
             "TikTok" -> "https://open.tiktokapis.com/v2/post/publish/video/init/"
@@ -1251,18 +1278,24 @@ class GeminiClipService {
             }
         }
 
-        // Native In-App Autonomous Publishing Pipeline
-        kotlinx.coroutines.delay(450) // Native dispatch latency
-        val generatedId = (10000000..99999999).random()
+        // No credential means no real platform publish occurred. Never report a
+        // synthetic success or fabricate a post URL.
         return@withContext DirectApiPublishLog(
             platform = platform,
-            isSuccess = true,
-            httpCode = 200,
+            isSuccess = false,
+            httpCode = 401,
             endpointUrl = endpointUrl,
-            responseSummary = "Native In-App Dispatch Successful (No External Automation / Handshake Complete)",
-            postUrl = getSamplePostUrl(platform, generatedId.toString()),
-            rawPayload = """{"status": "SUCCESS", "platform": "$platform", "published_id": "$generatedId", "mode": "NATIVE_DIRECT_API"}"""
+            responseSummary = "No platform credentials configured; nothing was published.",
+            postUrl = "",
+            rawPayload = ""
         )
+    }
+
+    private fun summarizeResponse(responseBody: String?): String {
+        if (responseBody.isNullOrBlank()) return "empty response"
+        return responseBody
+            .replace(Regex("(?i)(api[_-]?key|token|authorization|access_token)\\s*[:=]\\s*\\\"[^\\\"]*\\\""), "$1=\"[redacted]\"")
+            .take(240)
     }
 
     private fun getSamplePostUrl(platform: String, id: String = "891238"): String {

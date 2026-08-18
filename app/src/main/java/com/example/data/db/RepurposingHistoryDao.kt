@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
+import androidx.paging.PagingSource
 import com.example.data.model.RepurposingHistoryEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -14,6 +15,9 @@ interface RepurposingHistoryDao {
 
     @Query("SELECT * FROM repurposing_history ORDER BY timestamp DESC")
     fun getAllHistory(): Flow<List<RepurposingHistoryEntity>>
+
+    @Query("SELECT * FROM repurposing_history WHERE videoTitle LIKE '%' || :query || '%' OR actionType LIKE '%' || :query || '%' ORDER BY timestamp DESC")
+    fun pagingHistory(query: String): PagingSource<Int, RepurposingHistoryEntity>
 
     @Query("SELECT * FROM repurposing_history ORDER BY timestamp DESC LIMIT :limit")
     fun getRecentHistory(limit: Int = 25): Flow<List<RepurposingHistoryEntity>>
