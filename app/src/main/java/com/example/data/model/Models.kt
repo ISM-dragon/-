@@ -110,7 +110,9 @@ data class AutoPublishResult(
     val message: String,
     val dispatchedPlatforms: List<String>,
     val webhookDispatched: Boolean = false,
-    val postText: String = ""
+    val postText: String = "",
+    val successfulPlatforms: List<String> = emptyList(),
+    val failedPlatforms: List<String> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)

@@ -64,6 +64,7 @@ class OpusRepository(context: Context) {
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
     private val appContext = context.applicationContext
+    private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
     val geminiService = GeminiClipService(appContext)
     private val videoProcessor = Media3VideoProcessor(appContext)
     val aiRouter = com.example.domain.ai.IntelligentAiRouter(
@@ -113,7 +114,7 @@ class OpusRepository(context: Context) {
         editor.apply()
     }
 
-    private val _customApiKey = MutableStateFlow(apiPrefs.getString("custom_gemini_key", "") ?: "")
+    private val _customApiKey = MutableStateFlow(readSecret(apiPrefs, "custom_gemini_key"))
     val customApiKey = _customApiKey.asStateFlow()
 
     // Google Flow Credit Balance Tracking
@@ -191,8 +192,35 @@ class OpusRepository(context: Context) {
         _googleFlowCredits.value = info
     }
 
+    private fun readSecret(prefs: android.content.SharedPreferences, key: String): String {
+        val encryptedKey = "${key}_encrypted"
+        val encrypted = prefs.getString(encryptedKey, null).orEmpty()
+        if (encrypted.isNotBlank()) {
+            return runCatching { secureKeyManager.decrypt(encrypted) }.getOrDefault("")
+        }
+
+        // Migrate legacy plaintext values once, then remove the insecure copy.
+        val legacy = prefs.getString(key, null).orEmpty()
+        if (legacy.isNotBlank()) {
+            runCatching {
+                val protectedValue = secureKeyManager.encrypt(legacy)
+                prefs.edit().putString(encryptedKey, protectedValue).remove(key).apply()
+            }
+        }
+        return legacy
+    }
+
+    private fun putSecret(editor: android.content.SharedPreferences.Editor, key: String, value: String) {
+        val encryptedKey = "${key}_encrypted"
+        if (value.isBlank()) {
+            editor.remove(key).remove(encryptedKey)
+        } else {
+            editor.putString(encryptedKey, secureKeyManager.encrypt(value)).remove(key)
+        }
+    }
+
     private fun loadAiProviders(): List<AiProviderConfig> {
-        val json = apiPrefs.getString("ai_providers_json", null)
+        val json = readSecret(apiPrefs, "ai_providers_json").takeIf { it.isNotBlank() }
         if (!json.isNullOrBlank()) {
             try {
                 val listType = Types.newParameterizedType(List::class.java, AiProviderConfig::class.java)
@@ -204,7 +232,7 @@ class OpusRepository(context: Context) {
                 Log.e("OpusRepository", "Failed to parse saved ai providers", e)
             }
         }
-        val currentGeminiKey = apiPrefs.getString("custom_gemini_key", "") ?: ""
+        val currentGeminiKey = readSecret(apiPrefs, "custom_gemini_key")
         return if (currentGeminiKey.isBlank()) {
             emptyList()
         } else {
@@ -255,7 +283,9 @@ class OpusRepository(context: Context) {
         val listType = Types.newParameterizedType(List::class.java, AiProviderConfig::class.java)
         val adapter: JsonAdapter<List<AiProviderConfig>> = moshi.adapter(listType)
         val json = adapter.toJson(providers)
-        apiPrefs.edit().putString("ai_providers_json", json).apply()
+        val providersEditor = apiPrefs.edit()
+        putSecret(providersEditor, "ai_providers_json", json)
+        providersEditor.apply()
         _aiProviders.value = providers
 
         // Sync primary gemini key
@@ -263,7 +293,9 @@ class OpusRepository(context: Context) {
         if (primaryGemini != null) {
             geminiService.customApiKey = primaryGemini.apiKey
             _customApiKey.value = primaryGemini.apiKey
-            apiPrefs.edit().putString("custom_gemini_key", primaryGemini.apiKey).apply()
+            val geminiKeyEditor = apiPrefs.edit()
+            putSecret(geminiKeyEditor, "custom_gemini_key", primaryGemini.apiKey)
+            geminiKeyEditor.apply()
         }
     }
 
@@ -311,12 +343,12 @@ class OpusRepository(context: Context) {
     private val directApiPrefs = context.getSharedPreferences("opus_direct_platform_apis", Context.MODE_PRIVATE)
     private val _directApiCredentials = MutableStateFlow(
         DirectPlatformApiCredentials(
-            youtubeApiKey = directApiPrefs.getString("yt_api_key", "") ?: "",
-            youtubeBearerToken = directApiPrefs.getString("yt_bearer_token", "") ?: "",
-            tiktokAccessToken = directApiPrefs.getString("tiktok_access_token", "") ?: "",
-            instagramAccessToken = directApiPrefs.getString("ig_access_token", "") ?: "",
-            instagramAccountId = directApiPrefs.getString("ig_account_id", "") ?: "",
-            twitterBearerToken = directApiPrefs.getString("x_bearer_token", "") ?: "",
+            youtubeApiKey = readSecret(directApiPrefs, "yt_api_key"),
+            youtubeBearerToken = readSecret(directApiPrefs, "yt_bearer_token"),
+            tiktokAccessToken = readSecret(directApiPrefs, "tiktok_access_token"),
+            instagramAccessToken = readSecret(directApiPrefs, "ig_access_token"),
+            instagramAccountId = readSecret(directApiPrefs, "ig_account_id"),
+            twitterBearerToken = readSecret(directApiPrefs, "x_bearer_token"),
             isDirectApiEnabled = directApiPrefs.getBoolean("direct_api_enabled", true)
         )
     )
@@ -326,15 +358,14 @@ class OpusRepository(context: Context) {
     val recentPublishLogs = _recentPublishLogs.asStateFlow()
 
     suspend fun saveDirectApiCredentials(creds: DirectPlatformApiCredentials) = withContext(Dispatchers.IO) {
-        directApiPrefs.edit()
-            .putString("yt_api_key", creds.youtubeApiKey.trim())
-            .putString("yt_bearer_token", creds.youtubeBearerToken.trim())
-            .putString("tiktok_access_token", creds.tiktokAccessToken.trim())
-            .putString("ig_access_token", creds.instagramAccessToken.trim())
-            .putString("ig_account_id", creds.instagramAccountId.trim())
-            .putString("x_bearer_token", creds.twitterBearerToken.trim())
-            .putBoolean("direct_api_enabled", creds.isDirectApiEnabled)
-            .apply()
+        val credentialsEditor = directApiPrefs.edit()
+        putSecret(credentialsEditor, "yt_api_key", creds.youtubeApiKey.trim())
+        putSecret(credentialsEditor, "yt_bearer_token", creds.youtubeBearerToken.trim())
+        putSecret(credentialsEditor, "tiktok_access_token", creds.tiktokAccessToken.trim())
+        putSecret(credentialsEditor, "ig_access_token", creds.instagramAccessToken.trim())
+        putSecret(credentialsEditor, "ig_account_id", creds.instagramAccountId.trim())
+        putSecret(credentialsEditor, "x_bearer_token", creds.twitterBearerToken.trim())
+        credentialsEditor.putBoolean("direct_api_enabled", creds.isDirectApiEnabled).apply()
         _directApiCredentials.value = creds
     }
 
@@ -373,7 +404,7 @@ class OpusRepository(context: Context) {
         }
         when (result) {
             is com.example.domain.ai.AiExecutionResult.Success -> result.data
-            is com.example.domain.ai.AiExecutionResult.Failure -> "تم تطبيق أمر التحرير: $commandPrompt"
+            is com.example.domain.ai.AiExecutionResult.Failure -> "لم يُنفّذ أمر التحرير: ${result.errorMessage}"
         }
     }
 
@@ -480,13 +511,15 @@ class OpusRepository(context: Context) {
 
     suspend fun saveCustomApiKey(key: String) = withContext(Dispatchers.IO) {
         val trimmed = key.trim()
-        apiPrefs.edit().putString("custom_gemini_key", trimmed).apply()
+        val customKeyEditor = apiPrefs.edit()
+        putSecret(customKeyEditor, "custom_gemini_key", trimmed)
+        customKeyEditor.apply()
         geminiService.customApiKey = trimmed
         _customApiKey.value = trimmed
     }
 
     suspend fun clearCustomApiKey() = withContext(Dispatchers.IO) {
-        apiPrefs.edit().remove("custom_gemini_key").apply()
+        apiPrefs.edit().remove("custom_gemini_key").remove("custom_gemini_key_encrypted").apply()
         geminiService.customApiKey = null
         _customApiKey.value = ""
     }
@@ -697,7 +730,7 @@ class OpusRepository(context: Context) {
             title = actualTitle,
             sourceUrl = actualUrl,
             sourceDurationSec = actualDurationSec,
-            status = "COMPLETED",
+            status = "PROCESSING",
             targetPlatform = targetPlatform,
             captionTheme = captionTheme,
             clipCount = clipsData.size,
@@ -724,6 +757,7 @@ class OpusRepository(context: Context) {
         // stages. Only local files, content Uris, and direct media URLs are
         // rendered here; a YouTube/Drive webpage URL must first be resolved to
         // an authorized media Uri by a downloader or Drive integration.
+        var exportFailures = 0
         val mediaUri = inputMediaUri
         if (mediaUri != null) {
             _processingStep.value = ProcessingStep.StylingCaptions
@@ -752,10 +786,14 @@ class OpusRepository(context: Context) {
                     }
                     storedClip?.let { clipDao.updateExportPath(it.id, output.absolutePath) }
                 } catch (error: Exception) {
+                    exportFailures++
                     Log.w("OpusRepository", "Real clip export failed for clip ${index + 1}", error)
                 }
             }
         }
+
+        val finalProjectStatus = if (exportFailures == 0) "COMPLETED" else "PARTIAL_FAILURE"
+        projectDao.updateProject(project.copy(id = newProjectId, status = finalProjectStatus))
 
         val processingDurationMs = System.currentTimeMillis() - startTime
 
@@ -817,9 +855,14 @@ class OpusRepository(context: Context) {
             clipsGeneratedCount = clipsData.size,
             highestViralScore = maxScore,
             estimatedTimeSavedMinutes = actualDurationMinutes * 4,
-            status = "SUCCESS",
+            status = if (exportFailures == 0) "SUCCESS" else "PARTIAL_FAILURE",
             targetPlatform = targetPlatform,
-            details = "Extracted ${clipsData.size} viral shorts with top virality score of ${maxScore}%. Saved ~${actualDurationMinutes * 4} minutes of editing time.",
+            details = "Extracted ${clipsData.size} viral shorts with top virality score of ${maxScore}%. " +
+                if (exportFailures == 0) {
+                    "Saved ~${actualDurationMinutes * 4} minutes of editing time."
+                } else {
+                    "$exportFailures clip export(s) failed; review the project before publishing."
+                },
             timestamp = System.currentTimeMillis()
         )
         repurposingHistoryDao.insertHistory(historyEntry)
@@ -1041,19 +1084,30 @@ class OpusRepository(context: Context) {
             }
         }
 
-        // 2. Direct In-App Native API Publishing for each target platform
+        // 2. Direct API publishing is opt-in and must return a real platform result.
         val apiLogs = mutableListOf<DirectApiPublishLog>()
-        platformsToDispatch.forEach { platform ->
-            try {
-                val log = geminiService.publishDirectViaApi(
-                    platform = platform,
-                    clipTitle = clip.title,
-                    captionText = fullPostPayload,
-                    credentials = _directApiCredentials.value
-                )
-                apiLogs.add(log)
-            } catch (e: Exception) {
-                Log.e("OpusRepository", "Direct API publish failed for $platform", e)
+        if (_directApiCredentials.value.isDirectApiEnabled) {
+            platformsToDispatch.forEach { platform ->
+                try {
+                    val log = geminiService.publishDirectViaApi(
+                        platform = platform,
+                        clipTitle = clip.title,
+                        captionText = fullPostPayload,
+                        credentials = _directApiCredentials.value
+                    )
+                    apiLogs.add(log)
+                } catch (e: Exception) {
+                    Log.e("OpusRepository", "Direct API publish failed for $platform", e)
+                    apiLogs.add(
+                        DirectApiPublishLog(
+                            platform = platform,
+                            isSuccess = false,
+                            httpCode = 500,
+                            endpointUrl = "",
+                            responseSummary = "فشل النشر بسبب خطأ غير متوقع: ${e.localizedMessage ?: "Unknown error"}"
+                        )
+                    )
+                }
             }
         }
         if (apiLogs.isNotEmpty()) {
@@ -1066,19 +1120,26 @@ class OpusRepository(context: Context) {
             webhookSuccess = sendWebhookPayload(clip, config.webhookUrl, fullPostPayload, platformsToDispatch)
         }
 
-        val successCount = apiLogs.count { it.isSuccess }
-        val message = if (successCount > 0) {
-            "تم النشر التلقائي المباشر عبر الـ API بنجاح على $successCount من المنصات (${platformsToDispatch.joinToString(" • ")}) بدون الحاجة لأي تطبيقات أو أدوات وسيطة!"
-        } else {
-            "تم تجهيز ونشر الفيديو تلقائياً على ${platformsToDispatch.joinToString(" و ")} بنجاح!"
+        val successfulPlatforms = apiLogs.filter { it.isSuccess }.map { it.platform }.distinct()
+        val failedPlatforms = platformsToDispatch.filter { platform ->
+            apiLogs.none { it.platform.equals(platform, ignoreCase = true) && it.isSuccess }
+        }
+        val successCount = successfulPlatforms.size
+        val overallSuccess = successCount > 0 || webhookSuccess
+        val message = when {
+            successCount > 0 -> "تم النشر الفعلي عبر الـ API على ${successfulPlatforms.joinToString(" • ")}."
+            webhookSuccess -> "تعذر النشر المباشر، لكن تم إرسال بيانات المقطع إلى Webhook بنجاح."
+            else -> "فشل النشر: لم تُقبل أي منصة الطلب. راجع بيانات الاعتماد وسجل النشر."
         }
 
         return@withContext AutoPublishResult(
-            isSuccess = true,
+            isSuccess = overallSuccess,
             message = message,
             dispatchedPlatforms = platformsToDispatch,
             webhookDispatched = webhookSuccess,
-            postText = fullPostPayload
+            postText = fullPostPayload,
+            successfulPlatforms = successfulPlatforms,
+            failedPlatforms = failedPlatforms
         )
     }
 

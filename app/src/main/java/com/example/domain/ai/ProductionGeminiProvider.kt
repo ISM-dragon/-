@@ -30,11 +30,22 @@ class ProductionGeminiProvider(
     ): AiExecutionResult<List<ClipGenerationData>> {
         val start = System.currentTimeMillis()
         return try {
+            val analysisContext = buildString {
+                append(userNicheHint)
+                append("\nTarget platform: ").append(targetPlatform)
+                append("\nCaption style: ").append(captionStyle)
+                append("\nRequested clip count: ").append(requestedClipCount.coerceIn(1, 20))
+                creatorProfile?.let { profile ->
+                    append("\nCreator language: ").append(profile.primaryLanguage)
+                    append("; category: ").append(profile.contentCategory)
+                    append("; audience: ").append(profile.targetAudience)
+                }
+            }
             val clips = geminiService.analyzeAndGenerateClips(
                 title = videoTitle,
                 sourceUrl = "",
-                transcriptOrPrompt = userNicheHint,
-                durationMinutes = (durationSec / 60).coerceAtLeast(1),
+                transcriptOrPrompt = analysisContext,
+                durationMinutes = ((durationSec + 59) / 60).coerceAtLeast(1),
                 providers = listOf(config)
             )
             val latency = System.currentTimeMillis() - start
@@ -61,11 +72,11 @@ class ProductionGeminiProvider(
     ): AiExecutionResult<String> {
         val start = System.currentTimeMillis()
         return try {
-            val responseText = "تم تطبيق الأمر الذكي بنجاح: \"$commandPrompt\" على المقطع \"$clipTitle\". تم تحسين توقيت الخطاف ورفع احتمالية الانتشار إلى ${minOf(100, currentViralityScore + 2)}%."
-            AiExecutionResult.Success(
-                data = responseText,
+            AiExecutionResult.Failure(
                 providerName = config.name.ifBlank { "Google Gemini" },
-                latencyMs = System.currentTimeMillis() - start
+                httpCode = 501,
+                errorMessage = "لم يُنفّذ أمر التحرير: لا يوجد مسار فعلي لتعديل ملف الفيديو حاليًا.",
+                canFailover = false
             )
         } catch (e: Exception) {
             AiExecutionResult.Failure(

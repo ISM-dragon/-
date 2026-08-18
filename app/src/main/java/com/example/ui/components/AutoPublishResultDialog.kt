@@ -77,6 +77,8 @@ fun AutoPublishResultDialog(
     onOpenStudio: () -> Unit
 ) {
     val context = LocalContext.current
+    val resultColor = if (publishResult.isSuccess) OpusViralEmerald else Color(0xFFF87171)
+    val resultTitle = if (publishResult.isSuccess) "اكتمل تنفيذ النشر" else "تعذر تنفيذ النشر"
 
     val shareToApp = { packageName: String?, fallbackUrl: String? ->
         val sendIntent = Intent(Intent.ACTION_SEND).apply {
@@ -121,7 +123,7 @@ fun AutoPublishResultDialog(
                 .testTag("auto_publish_result_dialog"),
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
-            border = androidx.compose.foundation.BorderStroke(1.5.dp, OpusViralEmerald.copy(alpha = 0.8f))
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, resultColor.copy(alpha = 0.8f))
         ) {
             Column(
                 modifier = Modifier
@@ -142,31 +144,31 @@ fun AutoPublishResultDialog(
                                 .clip(CircleShape)
                                 .background(
                                     Brush.radialGradient(
-                                        listOf(OpusViralEmerald.copy(alpha = 0.5f), OpusDarkSurfaceHighlight)
+                                        listOf(resultColor.copy(alpha = 0.5f), OpusDarkSurfaceHighlight)
                                     )
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.CheckCircle,
-                                contentDescription = "Auto Publish Complete",
-                                tint = OpusViralEmerald,
+                                contentDescription = "Auto Publish Result",
+                                tint = resultColor,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "تم تفعيل النشر التلقائي بنجاح!",
+                                text = resultTitle,
                                 style = MaterialTheme.typography.titleMedium.copy(
                                     fontWeight = FontWeight.Black,
                                     color = OpusTextPrimary
                                 )
                             )
                             Text(
-                                text = "Auto-Publish Pipeline Executed 🚀",
+                                text = publishResult.message,
                                 fontSize = 11.sp,
-                                color = OpusViralEmerald,
+                                color = resultColor,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -253,7 +255,7 @@ fun AutoPublishResultDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "تم نسخ الهوك والهاشتاغات تلقائياً إلى الحافظة وجاهزة للنشر الفوري!",
+                            text = "النص والهاشتاغات جاهزة للمشاركة. تحقق من حالة كل منصة قبل اعتبار النشر مكتملًا.",
                             fontSize = 11.sp,
                             color = OpusTextPrimary,
                             fontWeight = FontWeight.Medium
@@ -267,22 +269,22 @@ fun AutoPublishResultDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(OpusViralEmerald.copy(alpha = 0.15f))
-                            .border(1.dp, OpusViralEmerald.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                            .background(resultColor.copy(alpha = 0.15f))
+                            .border(1.dp, resultColor.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                             .padding(10.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Default.CheckCircle,
                                 contentDescription = "Webhook",
-                                tint = OpusViralEmerald,
+                                tint = resultColor,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "تم إرسال حمولة البيانات بنجاح إلى رابط Webhook (Zapier/Make/n8n)!",
+                                text = "تم إرسال حمولة البيانات إلى Webhook بنجاح.",
                                 fontSize = 11.sp,
-                                color = OpusViralEmerald,
+                                color = resultColor,
                                 fontWeight = FontWeight.Bold
                             )
                         }

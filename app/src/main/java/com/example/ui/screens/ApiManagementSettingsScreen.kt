@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import java.util.Locale
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -885,13 +886,13 @@ private fun ProviderCreditManagementCard(
                             )
                             Row(verticalAlignment = Alignment.Bottom) {
                                 val remainingText = if (provider.creditUnit == "$") {
-                                    "$${String.format("%.2f", provider.remainingCredits)}"
+                                    "$${String.format(Locale.ROOT, "%.2f", provider.remainingCredits)}"
                                 } else {
                                     "${provider.remainingCredits.toInt()} ${provider.creditUnit}"
                                 }
 
                                 val totalText = if (provider.creditUnit == "$") {
-                                    "$${String.format("%.2f", provider.totalCreditsAllocated)}"
+                                    "$${String.format(Locale.ROOT, "%.2f", provider.totalCreditsAllocated)}"
                                 } else {
                                     "${provider.totalCreditsAllocated.toInt()} ${provider.creditUnit}"
                                 }

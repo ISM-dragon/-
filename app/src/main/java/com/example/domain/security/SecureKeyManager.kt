@@ -74,8 +74,7 @@ class SecureKeyManager(private val context: Context) {
             val cipherBase64 = Base64.encodeToString(encryptedBytes, Base64.NO_WRAP)
             "$ivBase64:$cipherBase64"
         } catch (e: Exception) {
-            // Fallback for devices/tests with limited keystore availability
-            Base64.encodeToString(plainText.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+            throw IllegalStateException("Secure Android Keystore is unavailable", e)
         }
     }
 
