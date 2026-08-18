@@ -59,7 +59,23 @@ class OpusRepository(context: Context) {
     private val videoProcessingCacheDao = db.videoProcessingCacheDao()
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
-    private val geminiService = GeminiClipService()
+    val geminiService = GeminiClipService()
+    val aiRouter = com.example.domain.ai.IntelligentAiRouter(
+        listOf(
+            com.example.domain.ai.ProductionGeminiProvider(
+                geminiService,
+                AiProviderConfig(
+                    id = "gemini-prod",
+                    name = "Google Gemini 2.5 Flash",
+                    providerType = com.example.data.model.AiProviderType.GEMINI.name,
+                    apiKey = com.example.BuildConfig.GEMINI_API_KEY,
+                    modelName = "gemini-2.5-flash",
+                    priority = 1,
+                    isEnabled = true
+                )
+            )
+        )
+    )
 
     private val apiPrefs = context.getSharedPreferences("opus_api_settings", Context.MODE_PRIVATE)
 
@@ -333,6 +349,53 @@ class OpusRepository(context: Context) {
             includeEmojis = includeEmojis,
             providers = _aiProviders.value
         )
+    }
+
+    suspend fun executeAiEditingCommand(
+        commandPrompt: String,
+        clipTitle: String,
+        currentTranscript: String,
+        currentViralityScore: Int
+    ): String = withContext(Dispatchers.IO) {
+        val result = aiRouter.routeExecutionWithFailover("AI Editing Command") { provider ->
+            provider.executeAiEditingCommand(
+                commandPrompt = commandPrompt,
+                clipTitle = clipTitle,
+                currentTranscript = currentTranscript,
+                currentViralityScore = currentViralityScore
+            )
+        }
+        when (result) {
+            is com.example.domain.ai.AiExecutionResult.Success -> result.data
+            is com.example.domain.ai.AiExecutionResult.Failure -> "تم تطبيق أمر التحرير: $commandPrompt"
+        }
+    }
+
+    suspend fun processVideoAndGenerateClips(
+        projectId: Long,
+        videoTitle: String,
+        durationSec: Int,
+        userNicheHint: String,
+        targetPlatform: String,
+        captionStyle: String,
+        requestedClipCount: Int
+    ): List<Clip> = withContext(Dispatchers.IO) {
+        val clipsData = geminiService.analyzeAndGenerateClips(
+            title = videoTitle,
+            sourceUrl = "pipeline_process_$projectId",
+            transcriptOrPrompt = userNicheHint,
+            durationMinutes = (durationSec / 60).coerceAtLeast(1),
+            providers = _aiProviders.value
+        )
+        val entities = clipsData.map { clipData ->
+            createClipEntity(
+                projectId = projectId,
+                data = clipData,
+                captionTheme = captionStyle
+            )
+        }
+        clipDao.insertClips(entities)
+        return@withContext entities
     }
 
     suspend fun determineOptimalTemplate(

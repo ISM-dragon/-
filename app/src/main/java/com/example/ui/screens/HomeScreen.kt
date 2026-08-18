@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material3.Button
@@ -141,8 +142,18 @@ fun HomeScreen(
     var isProcessing by remember { mutableStateOf(false) }
 
     var showAutoPublishSettingsDialog by remember { mutableStateOf(false) }
+    var showCreatorProfileDialog by remember { mutableStateOf(false) }
+    var creatorProfile by remember { mutableStateOf(com.example.domain.model.CreatorProfile()) }
     val autoPublishConfig by repository.autoPublishConfig.collectAsState()
     var autoPublishDialogData by remember { mutableStateOf<Pair<Clip, AutoPublishResult>?>(null) }
+
+    if (showCreatorProfileDialog) {
+        com.example.ui.components.CreatorProfileDialog(
+            initialProfile = creatorProfile,
+            onSaveProfile = { creatorProfile = it },
+            onDismiss = { showCreatorProfileDialog = false }
+        )
+    }
 
     if (showAutoPublishSettingsDialog) {
         AutoPublishSettingsDialog(
@@ -340,6 +351,91 @@ fun HomeScreen(
                 }
             }
         }
+        }
+
+        // Auto-Publish Setup Quick Banner Card
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { showCreatorProfileDialog = true }
+                    .testTag("creator_profile_banner"),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = OpusDarkSurfaceHighlight
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    OpusPrimaryViolet.copy(alpha = 0.6f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(OpusPrimaryViolet.copy(alpha = 0.3f))
+                            .border(1.dp, OpusElectricCyan, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Creator Profile",
+                            tint = OpusElectricCyan,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "🎨 ملف صانع المحتوى (Creator Profile)",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = OpusTextPrimary
+                                )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(OpusViralEmerald.copy(alpha = 0.2f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = if (creatorProfile.primaryLanguage == "ar") "العربية (RTL)" else "English",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = OpusViralEmerald
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "تصنيف: ${creatorProfile.contentCategory} • نيش: ${creatorProfile.targetAudience} • حذف الصمت: ${(creatorProfile.silenceRemovalAggressiveness * 100).toInt()}%",
+                            fontSize = 11.sp,
+                            color = OpusTextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Icon(
+                        imageVector = Icons.Default.ArrowForward,
+                        contentDescription = "Open Creator Profile",
+                        tint = OpusElectricCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
         }
 
         // Auto-Publish Setup Quick Banner Card

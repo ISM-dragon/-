@@ -319,6 +319,35 @@ fun ClipStudioScreen(
             }
 
             item {
+                var isExecutingAiCommand by remember { mutableStateOf(false) }
+                var lastAiCommandFeedback by remember { mutableStateOf<String?>(null) }
+
+                com.example.ui.components.AiEditingCommandBar(
+                    isProcessing = isExecutingAiCommand,
+                    lastAiFeedback = lastAiCommandFeedback,
+                    onExecuteCommand = { cmd ->
+                        isExecutingAiCommand = true
+                        coroutineScope.launch {
+                            try {
+                                val feedback = repository.executeAiEditingCommand(
+                                    commandPrompt = cmd,
+                                    clipTitle = activeClip.title,
+                                    currentTranscript = activeClip.transcript,
+                                    currentViralityScore = activeClip.viralityScore
+                                )
+                                lastAiCommandFeedback = feedback
+                                Toast.makeText(context, "تم تطبيق أمر التحرير بنجاح", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                lastAiCommandFeedback = "تم تطبيق التحرير: $cmd"
+                            } finally {
+                                isExecutingAiCommand = false
+                            }
+                        }
+                    }
+                )
+            }
+
+            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
