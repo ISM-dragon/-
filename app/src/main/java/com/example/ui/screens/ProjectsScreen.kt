@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Clip
 import com.example.data.model.Project
+import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
@@ -103,6 +104,12 @@ fun ProjectsScreen(
     val cachedMetadataList by repository.cachedVideoMetadata.collectAsState(initial = emptyList())
     val viralScoreMetricsList by repository.topViralScoreMetrics.collectAsState(initial = emptyList())
     val totalTimeSaved by repository.totalTimeSavedMinutes.collectAsState(initial = 0)
+    val processingJobs by repository.processingJobs.collectAsState(initial = emptyList())
+    val activeProcessingJobs = remember(processingJobs) {
+        processingJobs.filter {
+            it.status == ProcessingJobEntity.STATUS_QUEUED || it.status == ProcessingJobEntity.STATUS_RUNNING
+        }
+    }
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
@@ -232,6 +239,43 @@ fun ProjectsScreen(
             }
         }
 
+        if (activeProcessingJobs.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = OpusDarkSurfaceHighlight),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, OpusElectricCyan.copy(alpha = 0.45f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "Background processing (${activeProcessingJobs.size})",
+                            color = OpusTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        activeProcessingJobs.take(3).forEach { job ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(job.title, color = OpusTextPrimary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("${job.currentStage} • ${job.progress}%", color = OpusElectricCyan, fontSize = 10.sp)
+                                }
+                                IconButton(
+                                    onClick = { coroutineScope.launch { repository.cancelVideoProcessing(job.jobId) } },
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Cancel processing", tint = OpusHotPink)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (selectedTab == 0) {
             if (filteredProjects.isEmpty()) {
                 item {
@@ -317,7 +361,7 @@ fun ProjectsScreen(
                                     .padding(horizontal = 8.dp, vertical = 3.dp)
                             ) {
                                 Text(
-                                    text = "SQLite v2 Active",
+                                    text = "SQLite v3 Active",
                                     fontSize = 10.sp,
                                     color = OpusViralEmerald,
                                     fontWeight = FontWeight.Bold
@@ -759,7 +803,11 @@ private fun HistoryItemCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Saved: ~${history.estimatedTimeSavedMinutes}m",
+                    text = if (history.estimatedTimeSavedMinutes > 0) {
+                                "Saved: ~${history.estimatedTimeSavedMinutes}m"
+                            } else {
+                                "Time saved: unavailable"
+                            },
                     fontSize = 10.sp,
                     color = OpusViralEmerald,
                     fontWeight = FontWeight.Bold
@@ -896,9 +944,9 @@ private fun ViralMetricCard(metric: ViralScoreMetricEntity) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(text = "🎵 TikTok: ${metric.tiktokFitScore}%", fontSize = 10.sp, color = OpusTextSecondary)
-                Text(text = "📸 Reels: ${metric.reelsFitScore}%", fontSize = 10.sp, color = OpusTextSecondary)
-                Text(text = "🔴 Shorts: ${metric.shortsFitScore}%", fontSize = 10.sp, color = OpusTextSecondary)
+                Text(text = "TikTok: ${metric.tiktokFitScore.takeIf { it >= 0 }?.let { "$it%" } ?: "غير متاح"}", fontSize = 10.sp, color = OpusTextSecondary)
+                Text(text = "Reels: ${metric.reelsFitScore.takeIf { it >= 0 }?.let { "$it%" } ?: "غير متاح"}", fontSize = 10.sp, color = OpusTextSecondary)
+                Text(text = "Shorts: ${metric.shortsFitScore.takeIf { it >= 0 }?.let { "$it%" } ?: "غير متاح"}", fontSize = 10.sp, color = OpusTextSecondary)
             }
         }
     }

@@ -494,7 +494,7 @@ class OpusRepository(context: Context) {
             actionType = "DIRECT_API_PUBLISHED",
             clipsGeneratedCount = 1,
             highestViralScore = clip.viralityScore,
-            estimatedTimeSavedMinutes = 15,
+            estimatedTimeSavedMinutes = 0,
             status = if (log.isSuccess) "SUCCESS" else "FAILED",
             targetPlatform = platform,
             details = "Direct API dispatch to $platform: ${if (log.isSuccess) "Published successfully (HTTP ${log.httpCode})" else "Failed: ${log.responseSummary}"}",
@@ -790,8 +790,8 @@ class OpusRepository(context: Context) {
             videoTitle = actualTitle,
             sourceDurationSec = actualDurationSec,
             resolution = sourceMetadata?.let { "${it.width}x${it.height}" } ?: "غير متاح",
-            detectedLanguage = "غير مستخرج",
-            speakerCount = 0,
+            detectedLanguage = detectLanguageFromText(transcriptOrPrompt),
+            speakerCount = -1,
             audioSummary = "",
             fullTranscript = transcriptOrPrompt.ifBlank { clipsData.joinToString("\n") { it.transcript } },
             rawAnalysisJson = "{}",
@@ -813,9 +813,9 @@ class OpusRepository(context: Context) {
                 emotionalScore = clipData.emotionalScore,
                 shareabilityScore = clipData.shareabilityScore,
                 punchlineScore = clipData.punchlineScore,
-                tiktokFitScore = maxOf(75, minOf(99, clipData.viralityScore + 2)),
-                reelsFitScore = maxOf(70, minOf(99, clipData.viralityScore - 1)),
-                shortsFitScore = maxOf(80, minOf(99, clipData.viralityScore + 1)),
+                tiktokFitScore = -1,
+                reelsFitScore = -1,
+                shortsFitScore = -1,
                 viralityGrade = when {
                     clipData.viralityScore >= 95 -> "S+"
                     clipData.viralityScore >= 90 -> "S"
@@ -824,9 +824,9 @@ class OpusRepository(context: Context) {
                     else -> "B"
                 },
                 hookExplanation = clipData.hookExplanation,
-                viralityFactorsJson = "[\"High early engagement\", \"Emotional hook trigger\", \"Platform algorithm resonance\"]",
-                suggestedTargetAudience = "Social Media Scrollers & Creators",
-                peakRetentionSec = 3.5f,
+                viralityFactorsJson = clipData.hookExplanation.takeIf { it.isNotBlank() }?.let { "[${JSONObject.quote(it)}]" } ?: "[]",
+                suggestedTargetAudience = "غير مستخرج",
+                peakRetentionSec = -1f,
                 evaluatedAt = System.currentTimeMillis()
             )
         }
@@ -840,7 +840,7 @@ class OpusRepository(context: Context) {
             actionType = "AI_REPURPOSE_PROCESSED",
             clipsGeneratedCount = clipsData.size,
             highestViralScore = maxScore,
-            estimatedTimeSavedMinutes = actualDurationMinutes * 4,
+            estimatedTimeSavedMinutes = 0,
             status = if (exportFailures == 0) "SUCCESS" else "PARTIAL_FAILURE",
             targetPlatform = targetPlatform,
             details = "Extracted ${clipsData.size} viral shorts with top virality score of ${maxScore}%. " +
@@ -883,6 +883,17 @@ class OpusRepository(context: Context) {
             uri
         } else {
             null
+        }
+    }
+
+    private fun detectLanguageFromText(text: String): String {
+        if (text.isBlank()) return "غير مستخرج"
+        val arabic = text.count { it in '\u0600'..'\u06FF' }
+        val latin = text.count { it in 'A'..'Z' || it in 'a'..'z' }
+        return when {
+            arabic > latin && arabic >= 3 -> "ar"
+            latin >= 3 -> "en"
+            else -> "غير مؤكد"
         }
     }
 

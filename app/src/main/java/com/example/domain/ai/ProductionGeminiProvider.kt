@@ -53,7 +53,9 @@ class ProductionGeminiProvider(
                 data = clips,
                 providerName = config.name.ifBlank { "Google Gemini" },
                 latencyMs = latency,
-                tokensUsed = (clips.size * 450).toLong()
+                // Gemini usage metadata is not returned by the current REST path;
+                // keep this explicitly unavailable instead of inventing a token count.
+                tokensUsed = 0L
             )
         } catch (e: Exception) {
             AiExecutionResult.Failure(

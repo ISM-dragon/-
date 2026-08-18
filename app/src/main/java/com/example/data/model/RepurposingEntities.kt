@@ -24,9 +24,9 @@ data class VideoProcessingCacheEntity(
     val videoHash: String = "",
     val videoTitle: String,
     val sourceDurationSec: Int,
-    val resolution: String = "1080p (9:16 Optimized)",
-    val detectedLanguage: String = "ar",
-    val speakerCount: Int = 1,
+    val resolution: String = "غير متاح",
+    val detectedLanguage: String = "غير متاح",
+    val speakerCount: Int = -1,
     val audioSummary: String = "",
     val fullTranscript: String = "",
     val rawAnalysisJson: String = "", // Serialized cached JSON response
@@ -60,14 +60,14 @@ data class ViralScoreMetricEntity(
     val emotionalScore: Int = 0,
     val shareabilityScore: Int = 0,
     val punchlineScore: Int = 0,
-    val tiktokFitScore: Int = 0,
-    val reelsFitScore: Int = 0,
-    val shortsFitScore: Int = 0,
+    val tiktokFitScore: Int = -1,
+    val reelsFitScore: Int = -1,
+    val shortsFitScore: Int = -1,
     val viralityGrade: String = "غير متاح", // S+, S, A+, A, B
     val hookExplanation: String = "",
     val viralityFactorsJson: String = "[]", // Serialized list of bullet points
     val suggestedTargetAudience: String = "غير متاح",
-    val peakRetentionSec: Float = 0f,
+    val peakRetentionSec: Float = -1f,
     val evaluatedAt: Long = System.currentTimeMillis()
 )
 
