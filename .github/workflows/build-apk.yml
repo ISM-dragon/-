@@ -46,6 +46,11 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
+      - name: Run Android Lint
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:lint --no-daemon --stacktrace
+
       - name: Build Debug APK
         run: |
           if [ -f "./gradlew" ]; then
