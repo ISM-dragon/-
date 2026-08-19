@@ -758,9 +758,10 @@ def run_processing_job(external_id: str, source: str | None = None, llm: str | N
     else:
         command.extend(["run", pipeline_source, "--llm", llm, "--captions", captions, "--mode", mode])
     try:
+        working_directory = PIPELINE_DIR.parent if PIPELINE_DIR.parent.is_dir() else ROOT
         process = subprocess.Popen(
             command,
-            cwd=str(PIPELINE_DIR.parent),
+            cwd=str(working_directory),
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
