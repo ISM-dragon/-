@@ -32,13 +32,20 @@ LLM_TIMEOUT = 120.0
 
 
 class LlmError(Exception):
-    """User-actionable LLM failure (bad key, daemon down, model missing)."""
+    """User-actionable LLM failure with a stable, secret-safe error code."""
+
+    def __init__(self, message: str, code: str = "AI_FAILED"):
+        super().__init__(message)
+        self.code = code
+        self.safe_message = message
 
 
 def gemini_api_key() -> str | None:
-    key = os.environ.get("PUBLIKCLIP_GEMINI_API_KEY")
+    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("PUBLIKCLIP_GEMINI_API_KEY")
     if key:
         return key
+    if os.environ.get("PUBLIKCLIP_DISABLE_LOCAL_SECRETS", "").lower() in {"1", "true", "yes"}:
+        return None
     secrets_path = config.home_dir() / "secrets.json"
     if secrets_path.exists():
         try:
@@ -77,22 +84,19 @@ def _strip_fences(text: str) -> str:
 class GeminiClient:
     backend = "gemini"
 
-    def __init__(self, model: str = GEMINI_MODEL):
+    def __init__(self, model: str = GEMINI_MODEL, api_key: str | None = None):
         self.model = model
-        key = gemini_api_key()
+        key = api_key if api_key is not None else gemini_api_key()
         if not key:
-            raise LlmError(
-                "No Gemini API key found. Add one in Settings (or set "
-                "PUBLIKCLIP_GEMINI_API_KEY), or switch to Ollama mode."
-            )
+            raise LlmError("Gemini is not configured on the processing server.", "GEMINI_NOT_CONFIGURED")
         self._key = key
 
     def generate_json(
-        self, prompt: str, schema: dict, images: list[bytes] | None = None
+        self, prompt: str, schema: dict, images: list[bytes] | None = None, use_cache: bool = True
     ) -> dict:
         images = images or []
         cache_file = _cache_dir() / f"{_cache_key(self.backend, self.model, prompt, schema, images)}.json"
-        if cache_file.exists():
+        if use_cache and cache_file.exists():
             return json.loads(cache_file.read_text())
 
         parts: list[dict[str, Any]] = [{"text": prompt}]
@@ -120,7 +124,7 @@ class GeminiClient:
                     timeout=LLM_TIMEOUT,
                 )
                 if res.status_code in (401, 403):
-                    raise LlmError("Gemini rejected the API key. Check it in Settings.")
+                    raise LlmError("Gemini rejected the configured API key.", "GEMINI_AUTH_FAILED")
                 if res.status_code == 429:
                     import time
 
@@ -131,7 +135,7 @@ class GeminiClient:
                         detail = res.json()["error"]["message"]
                     except Exception:  # noqa: BLE001
                         detail = "rate limited"
-                    last_err = LlmError(f"Gemini 429: {detail}")
+                    last_err = LlmError("Gemini quota or rate limit was reached.", "GEMINI_QUOTA_EXCEEDED")
                     if "credit" in detail.lower() or "billing" in detail.lower():
                         raise last_err
                     time.sleep(4 * (attempt + 1))
@@ -140,13 +144,22 @@ class GeminiClient:
                 payload = res.json()
                 text = payload["candidates"][0]["content"]["parts"][0]["text"]
                 data = json.loads(_strip_fences(text))
-                cache_file.write_text(json.dumps(data))
+                if use_cache:
+                    cache_file.write_text(json.dumps(data))
                 return data
             except LlmError:
                 raise
-            except (httpx.HTTPError, KeyError, json.JSONDecodeError, IndexError) as err:
+            except httpx.TimeoutException as err:
                 last_err = err
-        raise LlmError(f"Gemini call failed after retries: {last_err}")
+                if attempt == 2:
+                    raise LlmError("Gemini request timed out.", "GEMINI_TIMEOUT") from err
+            except httpx.HTTPError as err:
+                last_err = err
+                if attempt == 2:
+                    raise LlmError("Gemini network request failed.", "GEMINI_NETWORK_ERROR") from err
+            except (KeyError, json.JSONDecodeError, IndexError) as err:
+                raise LlmError("Gemini returned an invalid response.", "GEMINI_RESPONSE_INVALID") from err
+        raise LlmError("Gemini request failed.", "GEMINI_NETWORK_ERROR") from last_err
 
 
 class OllamaClient:
