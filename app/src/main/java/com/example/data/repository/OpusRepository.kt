@@ -42,6 +42,7 @@ import com.example.data.model.UserCreditState
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
+import com.example.data.remote.ProcessingGatewayClient
 import com.example.data.remote.SpeechToTextService
 import com.example.data.remote.SocialGatewayClient
 import com.example.data.video.CaptionSidecarWriter
@@ -654,7 +655,8 @@ class OpusRepository(context: Context) {
         transcriptOrPrompt: String,
         durationMinutes: Int,
         targetPlatform: String,
-        captionTheme: String
+        captionTheme: String,
+        processingMode: String = "balanced"
     ): String = withContext(Dispatchers.IO) {
         require(title.isNotBlank()) { "عنوان الفيديو مطلوب." }
         require(sourceUri.isNotBlank()) { "مصدر الفيديو مطلوب." }
@@ -691,7 +693,8 @@ class OpusRepository(context: Context) {
             VideoProcessingWorker.KEY_TRANSCRIPT to transcriptOrPrompt,
             VideoProcessingWorker.KEY_DURATION_MINUTES to durationMinutes,
             VideoProcessingWorker.KEY_TARGET_PLATFORM to targetPlatform,
-            VideoProcessingWorker.KEY_CAPTION_THEME to captionTheme
+            VideoProcessingWorker.KEY_CAPTION_THEME to captionTheme,
+            VideoProcessingWorker.KEY_PROCESSING_MODE to processingMode
         )
         val request = OneTimeWorkRequestBuilder<VideoProcessingWorker>()
             .setInputData(input)
@@ -709,6 +712,48 @@ class OpusRepository(context: Context) {
             request
         )
         jobId
+    }
+
+    suspend fun importRemoteProcessingResult(
+        title: String,
+        sourceUri: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String,
+        clips: List<ProcessingGatewayClient.RemoteClip>,
+        exportedPaths: Map<String, String>
+    ): Long = withContext(Dispatchers.IO) {
+        require(clips.isNotEmpty()) { "Gateway لم يُرجع مقاطع صالحة." }
+        val projectId = projectDao.insertProject(
+            Project(
+                title = title,
+                sourceUrl = sourceUri,
+                sourceDurationSec = durationMinutes * 60,
+                status = "COMPLETED",
+                targetPlatform = targetPlatform,
+                captionTheme = captionTheme,
+                clipCount = clips.size,
+                bestViralityScore = clips.maxOfOrNull { it.score } ?: 0
+            )
+        )
+        val entities = clips.mapIndexed { index, clip ->
+            Clip(
+                projectId = projectId,
+                title = clip.title.ifBlank { "Clip ${index + 1}" },
+                startTimeSec = clip.startTimeSec,
+                endTimeSec = clip.endTimeSec.coerceAtLeast(clip.startTimeSec),
+                durationSec = clip.durationSec.coerceAtLeast(clip.endTimeSec - clip.startTimeSec),
+                viralityScore = clip.score.coerceIn(0, 100),
+                hookExplanation = "نتيجة تحليل Gateway/Python؛ الدرجة التفصيلية غير متاحة من المصدر.",
+                transcript = clip.transcript,
+                animatedCaptionsJson = "[]",
+                bRollPromptsJson = "[]",
+                socialCopyJson = "[]",
+                exportPath = exportedPaths[clip.mediaUrl].orEmpty()
+            )
+        }
+        clipDao.insertClips(entities)
+        projectId
     }
 
     fun observeProcessingJob(jobId: String): Flow<ProcessingJobEntity?> = processingJobDao.observe(jobId)
