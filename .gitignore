@@ -1,3 +1,18 @@
+# Python and shared pipeline
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+pipeline/wav2vec2_checkpoints/
+pipeline/.cache/
+
+# TypeScript / Node (kept for shared tooling if used)
+*.tsbuildinfo
+node_modules/
+
+# Android / Gradle
 *.iml
 .gradle
 .kotlin
@@ -14,5 +29,21 @@
 .externalNativeBuild
 .cxx
 local.properties
-.env
 debug.keystore
+
+# Gateway and local runtime data
+gateway/secrets/
+gateway/*.db
+gateway/.env
+*.env
+
+# Local media and generated artifacts
+*.mp4
+*.wav
+*.mkv
+*.webm
+*.mov
+*.jsonl
+
+# OS
+.DS_Store
