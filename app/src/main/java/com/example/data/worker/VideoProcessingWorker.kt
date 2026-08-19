@@ -6,14 +6,18 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.example.data.db.OpusDatabase
+import com.example.data.model.GatewayConfig
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.Project
+import com.example.data.remote.ProcessingGatewayClient
 import com.example.data.repository.OpusRepository
 import com.example.data.video.MediaUriStabilizer
 import com.example.domain.model.PipelineJob
 import com.example.domain.model.PipelineStageStatus
 import com.example.domain.pipeline.ProductionVideoPipeline
+import com.example.domain.security.SecureKeyManager
 import kotlinx.coroutines.CancellationException
+import java.io.File
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.Locale
@@ -84,6 +88,37 @@ class VideoProcessingWorker(
 
         return try {
             val repository = OpusRepository(applicationContext)
+            val gatewayConfig = loadGatewayConfig()
+            if (gatewayConfig.baseUrl.isNotBlank()) {
+                val remoteProjectId = runRemoteGateway(
+                    repository = repository,
+                    config = gatewayConfig,
+                    jobId = jobId,
+                    title = title,
+                    sourceUri = sourceUri,
+                    durationMinutes = durationMinutes,
+                    targetPlatform = targetPlatform,
+                    captionTheme = captionTheme,
+                    processingMode = inputData.getString(KEY_PROCESSING_MODE).orEmpty().ifBlank { "balanced" }
+                )
+                jobs.updateState(
+                    jobId = jobId,
+                    status = ProcessingJobEntity.STATUS_SUCCEEDED,
+                    progress = 100,
+                    stage = "COMPLETED",
+                    outputProjectId = remoteProjectId
+                )
+                ProcessingNotification.show(
+                    applicationContext,
+                    jobId,
+                    "اكتملت معالجة Gateway",
+                    "تم تنزيل المقاطع وحفظ المشروع رقم $remoteProjectId.",
+                    success = true
+                )
+                setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 100, KEY_STAGE to "COMPLETED", KEY_PROJECT_ID to remoteProjectId))
+                MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
+                return Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to remoteProjectId))
+            }
             val project = Project(
                 title = title,
                 sourceUrl = sourceUri,
@@ -178,6 +213,64 @@ class VideoProcessingWorker(
         }
     }
 
+    private fun loadGatewayConfig(): GatewayConfig {
+        val prefs = applicationContext.getSharedPreferences("ism_gateway_settings", Context.MODE_PRIVATE)
+        val secure = SecureKeyManager(applicationContext)
+        val encrypted = prefs.getString("gateway_token_encrypted", "").orEmpty()
+        val token = if (encrypted.isNotBlank()) secure.decrypt(encrypted) else prefs.getString("gateway_token", "").orEmpty()
+        return GatewayConfig(
+            baseUrl = prefs.getString("base_url", "").orEmpty().trim(),
+            token = token.trim()
+        )
+    }
+
+    private suspend fun runRemoteGateway(
+        repository: OpusRepository,
+        config: GatewayConfig,
+        jobId: String,
+        title: String,
+        sourceUri: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String,
+        processingMode: String
+    ): Long {
+        val client = ProcessingGatewayClient(applicationContext.contentResolver)
+        val remote = client.process(
+            config = config,
+            sourceUri = sourceUri,
+            captionTheme = captionTheme,
+            mode = processingMode,
+            onProgress = { progress ->
+                jobs.updateState(
+                    jobId = jobId,
+                    status = ProcessingJobEntity.STATUS_RUNNING,
+                    progress = progress.percent,
+                    stage = progress.stage,
+                    errorMessage = ""
+                )
+                setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to progress.percent, KEY_STAGE to progress.stage, KEY_MESSAGE to progress.message))
+            }
+        ).getOrThrow()
+        require(remote.clips.isNotEmpty()) { "Gateway اكتمل دون مقاطع قابلة للتنزيل." }
+        val outputDirectory = File(applicationContext.filesDir, "gateway_exports/$jobId").apply { mkdirs() }
+        val exportedPaths = linkedMapOf<String, String>()
+        remote.clips.forEachIndexed { index, clip ->
+            val output = File(outputDirectory, "clip_${index + 1}.mp4")
+            client.download(config, clip.mediaUrl, output).getOrThrow()
+            exportedPaths[clip.mediaUrl] = output.absolutePath
+        }
+        return repository.importRemoteProcessingResult(
+            title = title,
+            sourceUri = sourceUri,
+            durationMinutes = durationMinutes,
+            targetPlatform = targetPlatform,
+            captionTheme = captionTheme,
+            clips = remote.clips,
+            exportedPaths = exportedPaths
+        )
+    }
+
     private suspend fun syncPipelineState(jobId: String, pipelineJob: PipelineJob) {
         val stage = pipelineJob.currentStage
         val stageProgress = pipelineJob.stages[stage]
@@ -230,6 +323,7 @@ class VideoProcessingWorker(
         const val KEY_DURATION_MINUTES = "duration_minutes"
         const val KEY_TARGET_PLATFORM = "target_platform"
         const val KEY_CAPTION_THEME = "caption_theme"
+        const val KEY_PROCESSING_MODE = "processing_mode"
         const val KEY_PROGRESS = "progress"
         const val KEY_STAGE = "stage"
         const val KEY_MESSAGE = "message"
