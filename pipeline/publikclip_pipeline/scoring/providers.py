@@ -88,6 +88,8 @@ def _credential(profile: ProviderProfile) -> str:
     candidates = []
     if ref:
         candidates.append(f"PUBLIKCLIP_SECRET_{ref.upper().replace('-', '_')}")
+    if profile.id == "gemini":
+        candidates.append("GEMINI_API_KEY")
     candidates.append(f"PUBLIKCLIP_{profile.id.upper().replace('-', '_')}_API_KEY")
     if profile.id == "gemini":
         candidates.append("PUBLIKCLIP_GEMINI_API_KEY")

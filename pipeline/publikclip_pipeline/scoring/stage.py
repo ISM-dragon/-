@@ -80,7 +80,7 @@ class ScoreStage(Stage):
         try:
             client = llm_mod.make_client(llm_mode)
         except llm_mod.LlmError as err:
-            raise StageError(str(err)) from err
+            raise StageError(err.safe_message, err.code) from err
 
         segments = diarize["segments"]
         timeline = events["timeline"]

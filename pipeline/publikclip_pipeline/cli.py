@@ -110,7 +110,7 @@ def _execute(job: queue.Job, jsonl: bool) -> int:
     try:
         results = queue.run_stages(job, _stages(), emit)
     except queue.StageError as err:
-        _emit_result(jsonl, {"ok": False, "job_id": job.id, "error": str(err)})
+        _emit_result(jsonl, {"ok": False, "job_id": job.id, "error": err.safe_message, "error_code": err.code})
         return 1
     summary = {
         "ok": True,

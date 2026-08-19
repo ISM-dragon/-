@@ -209,6 +209,11 @@ def stage_statuses(job_id: str) -> dict[str, str]:
 class StageError(Exception):
     """A stage failed in a way the user can act on. Message is user-facing."""
 
+    def __init__(self, message: str, code: str = "PIPELINE_STAGE_FAILED"):
+        super().__init__(message)
+        self.code = code
+        self.safe_message = message
+
 
 ProgressFn = Callable[[str, float, str], None]  # (stage, fraction 0..1 or -1, message)
 
