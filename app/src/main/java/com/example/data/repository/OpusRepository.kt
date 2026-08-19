@@ -919,6 +919,12 @@ class OpusRepository(context: Context) {
                 "opus_clips/$newProjectId"
             )
             val storedClips = clipDao.getClipsForProjectSync(newProjectId)
+            val faceTrackPoints = runCatching {
+                faceTrackingAnalyzer.analyze(mediaUri, sampleIntervalMs = 600L, maxSamples = 180)
+            }.getOrElse { error ->
+                Log.w("OpusRepository", "Face tracking unavailable; using safe center crop", error)
+                emptyList()
+            }
             clipsData.forEachIndexed { index, data ->
                 val storedClip = storedClips.firstOrNull {
                     it.title == data.title &&
@@ -933,6 +939,7 @@ class OpusRepository(context: Context) {
                         startTimeSec = data.startTimeSec,
                         endTimeSec = data.endTimeSec,
                         vertical = true,
+                        cropCenterX = cropCenterForClip(faceTrackPoints, data.startTimeSec, data.endTimeSec),
                         captionCues = storedClip?.let(::decodeCaptionCues).orEmpty()
                     ) { progress ->
                         _processingStep.value = ProcessingStep.StylingCaptions
@@ -1137,6 +1144,31 @@ class OpusRepository(context: Context) {
             layoutType = "9:16 Full Screen",
             isFavorite = data.viralityScore >= 95
         )
+    }
+
+    private fun cropCenterForClip(
+        points: List<com.example.data.video.FaceTrackPoint>,
+        startTimeSec: Int,
+        endTimeSec: Int
+    ): Float? {
+        val inClip = points.filter { it.timeMs in (startTimeSec * 1000L)..(endTimeSec * 1000L) }
+        if (inClip.isEmpty()) return null
+        val dominantTrack = inClip.groupBy { it.trackingId }
+            .values
+            .maxByOrNull { track ->
+                track.size * 10f + track.map { it.width * it.height }.average().toFloat()
+            }
+            ?: return null
+        var smoothed = dominantTrack.first().centerX
+        var weightTotal = 0f
+        var weightedCenter = 0f
+        dominantTrack.sortedBy { it.timeMs }.forEach { point ->
+            val confidence = (point.width * point.height).coerceIn(0.05f, 1f)
+            smoothed += (point.centerX - smoothed) * 0.35f
+            weightedCenter += smoothed * confidence
+            weightTotal += confidence
+        }
+        return if (weightTotal > 0f) (weightedCenter / weightTotal).coerceIn(-1f, 1f) else smoothed.coerceIn(-1f, 1f)
     }
 
     suspend fun exportClipToFile(

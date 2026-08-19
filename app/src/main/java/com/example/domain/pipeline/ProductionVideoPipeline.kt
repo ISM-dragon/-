@@ -6,13 +6,13 @@ import com.example.data.model.AiProviderType
 import com.example.data.model.Clip
 import com.example.data.model.Project
 import com.example.data.repository.OpusRepository
+import com.example.data.video.FaceTrackingAnalyzer
 import com.example.data.video.LocalMediaAnalyzer
 import com.example.domain.analysis.AnalysisValidator
 import com.example.domain.analysis.Transcript
 import com.example.domain.analysis.CandidateClipDetector
 import com.example.domain.analysis.ViralityScoreEngine
 import com.example.domain.model.CreatorProfile
-import com.example.domain.video.UnsupportedSmartReframingProvider
 import com.example.domain.model.PipelineJob
 import com.example.domain.model.PipelineStageProgress
 import com.example.domain.model.PipelineStageStatus
@@ -37,7 +37,7 @@ class ProductionVideoPipeline(
 ) {
     private val mediaAnalyzer = LocalMediaAnalyzer(context.applicationContext)
     private val candidateDetector = CandidateClipDetector()
-    private val reframingProvider = UnsupportedSmartReframingProvider()
+    private val faceTrackingAnalyzer = FaceTrackingAnalyzer(context.applicationContext)
     private val _activeJob = MutableStateFlow<PipelineJob?>(null)
     val activeJob = _activeJob.asStateFlow()
 
@@ -53,7 +53,7 @@ class ProductionVideoPipeline(
         userNicheHint: String,
         targetPlatform: String,
         captionStyle: String,
-        requestedClipCount: Int = 4,
+        requestedClipCount: Int = 0,
         creatorProfile: CreatorProfile = CreatorProfile(),
         jobId: String? = null,
         transcriptOrPrompt: String = ""
@@ -135,7 +135,7 @@ class ProductionVideoPipeline(
             if (transcript.isWordTimed && transcript.segments.isNotEmpty()) {
                 job = stage(job, PipelineStageType.CLIP_DETECTION, PipelineStageStatus.PROCESSING, 0f, "بناء Interest Curve واكتشاف candidate windows")
                 val curve = candidateDetector.buildInterestCurve(transcript, media.audioSignals)
-                val candidates = candidateDetector.detect(transcript, curve, requestedClipCount.coerceIn(1, 30))
+                val candidates = candidateDetector.detect(transcript, curve, requestedClipCount)
                 require(candidates.isNotEmpty()) { "لم ينتج التحليل المحلي أي مرشح صالح." }
                 job = stage(job, PipelineStageType.CLIP_DETECTION, PipelineStageStatus.COMPLETED, 1f, "تم اكتشاف ${candidates.size} مرشحًا بحدود جمل")
                 checkCancelled()
@@ -164,16 +164,18 @@ class ProductionVideoPipeline(
             onStageChanged(job)
             job = stage(job, PipelineStageType.HOOK_GENERATION, PipelineStageStatus.COMPLETED, 1f, "تم قبول نتيجة AI بعد validation")
             job = stage(job, PipelineStageType.CAPTION_SYNTHESIS, PipelineStageStatus.COMPLETED, 1f, "تم حفظ التوقيتات التي أعادها المزود فقط")
-            val reframing = reframingProvider.detectTrajectory(uri).getOrNull()
+            val facePoints = runCatching {
+                faceTrackingAnalyzer.analyze(uri, sampleIntervalMs = 600L, maxSamples = 180)
+            }.getOrElse { emptyList() }
             job = stage(
                 job,
                 PipelineStageType.SMART_REFRAMING,
                 PipelineStageStatus.COMPLETED,
                 1f,
-                if (reframing?.supported == true) {
-                    "تم تطبيق trajectory إعادة التأطير"
+                if (facePoints.isNotEmpty()) {
+                    "تم تحليل ${facePoints.size} نقطة وجه؛ سيُستخدم المسار الملساء في التصدير"
                 } else {
-                    reframing?.reason ?: "تعذر تتبع المتحدث؛ تم الاحتفاظ بالتأطير الآمن"
+                    "لم يُكتشف وجه موثوق؛ سيستخدم التصدير منطقة آمنة ثابتة"
                 }
             )
             job = stage(job, PipelineStageType.RENDERING_EXPORT, PipelineStageStatus.COMPLETED, 1f, "تم التحقق من ملفات التصدير الفعلية")

@@ -45,7 +45,7 @@ interface AiProvider {
         userNicheHint: String,
         targetPlatform: String,
         captionStyle: String,
-        requestedClipCount: Int = 4,
+        requestedClipCount: Int = 0,
         creatorProfile: CreatorProfile? = null
     ): AiExecutionResult<List<ClipGenerationData>>
 
