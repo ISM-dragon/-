@@ -76,7 +76,7 @@ class ProcessingGatewayClient(
                 delay(POLL_INTERVAL_MS)
             }
         } catch (error: Exception) {
-            Result.failure(error)
+            Result.failure<RemoteResult>(error)
         }
     }
 
