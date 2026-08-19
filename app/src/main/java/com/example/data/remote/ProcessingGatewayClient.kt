@@ -52,7 +52,9 @@ class ProcessingGatewayClient(
         try {
             val baseUrl = validateBaseUrl(config.baseUrl)
             val localUri = Uri.parse(sourceUri)
-            val upload = upload(baseUrl, config.token, localUri)
+            val upload = upload(baseUrl, config.token, localUri) { percent ->
+                onProgress(Progress(percent, "UPLOADING", "رفع الفيديو إلى Gateway: $percent%"))
+            }
             onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
             val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode)
             var lastStatus = "queued"
@@ -82,7 +84,12 @@ class ProcessingGatewayClient(
         }
     }
 
-    private fun upload(baseUrl: String, token: String, sourceUri: Uri): String {
+    private suspend fun upload(
+        baseUrl: String,
+        token: String,
+        sourceUri: Uri,
+        onProgress: suspend (Int) -> Unit
+    ): String {
         val connection = openConnection("$baseUrl/v1/sources/upload", token, "POST").apply {
             setRequestProperty("Content-Type", "video/mp4")
             doOutput = true
@@ -90,9 +97,31 @@ class ProcessingGatewayClient(
         return try {
             val input = contentResolver.openInputStream(sourceUri)
                 ?: error("تعذر فتح ملف الفيديو للرفع")
+            val totalBytes = contentResolver.openAssetFileDescriptor(sourceUri, "r")?.use { it.length } ?: -1L
+            var writtenBytes = 0L
+            var lastReportedAt = 0L
             input.use { source ->
-                connection.outputStream.use { output -> source.copyTo(output, DEFAULT_BUFFER_SIZE) }
+                connection.outputStream.use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val count = source.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        writtenBytes += count
+                        val now = System.currentTimeMillis()
+                        if (now - lastReportedAt >= 250L || (totalBytes > 0L && writtenBytes >= totalBytes)) {
+                            val percent = if (totalBytes > 0L) {
+                                (writtenBytes.toDouble() / totalBytes.toDouble() * 10.0).toInt().coerceIn(0, 10)
+                            } else {
+                                0
+                            }
+                            onProgress(percent)
+                            lastReportedAt = now
+                        }
+                    }
+                }
             }
+            onProgress(10)
             val json = readJson(connection)
             json.optString("source").takeIf { it.isNotBlank() }
                 ?: error("Gateway لم يُرجع رابط المصدر المرفوع")
