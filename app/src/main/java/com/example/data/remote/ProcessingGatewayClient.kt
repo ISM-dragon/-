@@ -49,7 +49,7 @@ class ProcessingGatewayClient(
         mode: String,
         onProgress: suspend (Progress) -> Unit
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatching<RemoteResult> {
             val baseUrl = validateBaseUrl(config.baseUrl)
             val localUri = Uri.parse(sourceUri)
             val upload = upload(baseUrl, config.token, localUri)
