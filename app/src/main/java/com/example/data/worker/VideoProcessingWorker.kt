@@ -56,7 +56,16 @@ class VideoProcessingWorker(
         }
         val parsedSource = runCatching { Uri.parse(sourceUri) }.getOrNull()
         if (parsedSource?.scheme !in setOf("content", "file")) {
-            return Result.failure(workDataOf(KEY_JOB_ID to jobId, KEY_ERROR to "مصدر الفيديو غير صالح أو غير محلي."))
+            val message = "مصدر الفيديو غير صالح أو غير محلي."
+            jobs.updateState(
+                jobId = jobId,
+                status = ProcessingJobEntity.STATUS_FAILED,
+                progress = jobs.get(jobId)?.progress ?: 0,
+                stage = "FAILED",
+                errorMessage = message
+            )
+            ProcessingNotification.show(applicationContext, jobId, "فشلت معالجة ISM", message, success = false)
+            return Result.failure(workDataOf(KEY_JOB_ID to jobId, KEY_ERROR to message))
         }
         val existingJob = jobs.get(jobId)
         if (existingJob?.status == ProcessingJobEntity.STATUS_SUCCEEDED) {
@@ -138,11 +147,12 @@ class VideoProcessingWorker(
             throw cancelled
         } catch (error: Exception) {
             val message = error.localizedMessage?.takeIf { it.isNotBlank() } ?: "فشلت معالجة الفيديو."
+            val preservedProgress = jobs.get(jobId)?.progress ?: 0
             if (runAttemptCount < 2 && isRetryable(error)) {
                 jobs.updateState(
                     jobId = jobId,
                     status = ProcessingJobEntity.STATUS_QUEUED,
-                    progress = 0,
+                    progress = preservedProgress,
                     stage = "RETRY_WAIT",
                     errorMessage = String.format(Locale.ROOT, "إعادة المحاولة %d: %s", attempt, message)
                 )
@@ -151,7 +161,7 @@ class VideoProcessingWorker(
                 jobs.updateState(
                     jobId = jobId,
                     status = ProcessingJobEntity.STATUS_FAILED,
-                    progress = 0,
+                    progress = preservedProgress,
                     stage = "FAILED",
                     errorMessage = String.format(Locale.ROOT, "المحاولة %d: %s", attempt, message)
                 )
@@ -200,8 +210,10 @@ class VideoProcessingWorker(
     }
 
     private fun isRetryable(error: Exception): Boolean {
-        if (error is SocketTimeoutException || error is IOException) return true
         val message = error.message.orEmpty().lowercase(Locale.ROOT)
+        if (message.contains("http 400") || message.contains("http 401") ||
+            message.contains("http 403") || message.contains("http 404")) return false
+        if (error is SocketTimeoutException || error is IOException) return true
         return message.contains("timeout") ||
             message.contains("network") ||
             message.contains("http 5") ||

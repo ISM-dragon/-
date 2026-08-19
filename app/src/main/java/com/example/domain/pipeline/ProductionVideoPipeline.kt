@@ -2,6 +2,7 @@ package com.example.domain.pipeline
 
 import android.content.Context
 import android.net.Uri
+import com.example.data.model.AiProviderType
 import com.example.data.model.Clip
 import com.example.data.model.Project
 import com.example.data.repository.OpusRepository
@@ -93,8 +94,21 @@ class ProductionVideoPipeline(
 
             job = stage(job, PipelineStageType.TRANSCRIPTION, PipelineStageStatus.PROCESSING, 0f, "التحقق من مصدر النص قبل التحليل")
             val transcript = if (transcriptOrPrompt.isBlank()) {
-                repository.transcribeLocalMediaDetailed(project.sourceUrl, creatorProfile.primaryLanguage.takeIf { it.length == 2 })
-                    .getOrElse { throw it }
+                val hasSpeechProvider = repository.aiProviders.value.any {
+                    it.isEnabled && it.apiKey.isNotBlank() &&
+                        (it.providerType == AiProviderType.OPENAI.name || it.providerType == AiProviderType.GROQ.name)
+                }
+                if (hasSpeechProvider) {
+                    repository.transcribeLocalMediaDetailed(project.sourceUrl, creatorProfile.primaryLanguage.takeIf { it.length == 2 })
+                        .getOrElse { throw it }
+                } else {
+                    Transcript(
+                        language = creatorProfile.primaryLanguage,
+                        segments = emptyList(),
+                        provider = "gemini_video",
+                        isWordTimed = false
+                    )
+                }
             } else {
                 Transcript(
                     language = creatorProfile.primaryLanguage,
@@ -104,7 +118,9 @@ class ProductionVideoPipeline(
                 )
             }
             val analysisText = transcript.text.ifBlank { transcriptOrPrompt.trim() }
-            require(analysisText.isNotBlank()) { "لا يوجد نص أو مزود transcription لتحليل الفيديو." }
+            require(analysisText.isNotBlank() || uri.scheme == "content" || uri.scheme == "file") {
+                "لا يوجد نص أو فيديو محلي صالح لتحليل الفيديو."
+            }
             job = stage(
                 job,
                 PipelineStageType.TRANSCRIPTION,

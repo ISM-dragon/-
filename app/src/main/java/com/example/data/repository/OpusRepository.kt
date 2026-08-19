@@ -444,13 +444,23 @@ class OpusRepository(context: Context) {
         )
     }
 
+    private fun currentGeminiRouter(): com.example.domain.ai.IntelligentAiRouter {
+        val configuredGeminiProviders = _aiProviders.value
+            .filter { it.isEnabled && it.apiKey.isNotBlank() && it.providerType == AiProviderType.GEMINI.name }
+            .sortedBy { it.priority }
+            .map { config ->
+                com.example.domain.ai.ProductionGeminiProvider(geminiService, config)
+            }
+        return com.example.domain.ai.IntelligentAiRouter(configuredGeminiProviders)
+    }
+
     suspend fun executeAiEditingCommand(
         commandPrompt: String,
         clipTitle: String,
         currentTranscript: String,
         currentViralityScore: Int
     ): String = withContext(Dispatchers.IO) {
-        val result = aiRouter.routeExecutionWithFailover("AI Editing Command") { provider ->
+        val result = currentGeminiRouter().routeExecutionWithFailover("AI Editing Command") { provider ->
             provider.executeAiEditingCommand(
                 commandPrompt = commandPrompt,
                 clipTitle = clipTitle,
