@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.opuspro.apk"
     minSdk = 24
     targetSdk = 36
-    versionCode = 4
-    versionName = "1.1.2"
+    versionCode = 5
+    versionName = "1.2.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
