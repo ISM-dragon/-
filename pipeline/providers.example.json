@@ -1,0 +1,54 @@
+{
+  "providers": [
+    {
+      "id": "gemini",
+      "name": "Google Gemini",
+      "type": "gemini",
+      "credential_ref": "gemini",
+      "default_model": "gemini-flash-latest",
+      "fallback_model": "",
+      "enabled": true,
+      "capabilities": {
+        "chat": true,
+        "structured_output": true,
+        "vision": true,
+        "json_mode": true,
+        "streaming": false
+      }
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "type": "openai_compatible",
+      "base_url": "https://openrouter.ai/api/v1",
+      "credential_ref": "openrouter",
+      "default_model": "google/gemini-2.5-flash",
+      "fallback_model": "openai/gpt-4o-mini",
+      "enabled": false,
+      "capabilities": {
+        "chat": true,
+        "structured_output": true,
+        "vision": true,
+        "json_mode": true,
+        "streaming": false
+      }
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama Local",
+      "type": "ollama",
+      "base_url": "http://localhost:11434/api",
+      "credential_ref": "",
+      "default_model": "llama3.1:8b",
+      "fallback_model": "",
+      "enabled": false,
+      "capabilities": {
+        "chat": true,
+        "structured_output": true,
+        "vision": false,
+        "json_mode": true,
+        "streaming": false
+      }
+    }
+  ]
+}

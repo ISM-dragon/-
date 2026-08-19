@@ -2,18 +2,28 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib.util
+import ipaddress
 import json
 import os
 import secrets
+import shutil
+import socket
 import sqlite3
+import subprocess
+import sys
+import time as time_module
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as UrlRequest, urlopen
 from contextlib import closing
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field, HttpUrl
 
 ROOT = Path(__file__).resolve().parent
@@ -21,15 +31,25 @@ DB_PATH = Path(os.getenv("ISM_GATEWAY_DB", str(ROOT / "gateway.db")))
 GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "")
 PROVIDER_MODE = os.getenv("PROVIDER_MODE", "mock")
 PUBLISH_INTERVAL_SECONDS = max(10, int(os.getenv("PUBLISH_INTERVAL_SECONDS", "30")))
+PROCESSING_ROOT = Path(os.getenv("ISM_PROCESSING_ROOT", str(ROOT / "processing")))
+PIPELINE_DIR = Path(os.getenv("ISM_PIPELINE_DIR", str(ROOT.parent / "pipeline")))
+PIPELINE_BIN = os.getenv("ISM_PIPELINE_BIN", "").strip()
+YTDLP_BIN = os.getenv("ISM_YTDLP_BIN", "yt-dlp").strip()
+SOURCE_ROOT = Path(os.getenv("ISM_SOURCE_ROOT", str(ROOT / "sources")))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8787").rstrip("/")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 ACCOUNT_DAILY_LIMIT = max(1, int(os.getenv("ACCOUNT_DAILY_LIMIT", "10")))
 ACCOUNT_MIN_GAP_SECONDS = max(0, int(os.getenv("ACCOUNT_MIN_GAP_SECONDS", "60")))
 MAX_PROVIDER_ATTEMPTS = max(1, int(os.getenv("MAX_PROVIDER_ATTEMPTS", "3")))
+MAX_ACTIVE_PROCESSING_JOBS = max(1, int(os.getenv("MAX_ACTIVE_PROCESSING_JOBS", "1")))
+MAX_ACTIVE_SOURCE_JOBS = max(1, int(os.getenv("MAX_ACTIVE_SOURCE_JOBS", "2")))
+GEMINI_KEY_FILE = Path(os.getenv("ISM_GEMINI_KEY_FILE", str(ROOT / "secrets" / "gemini.key")))
+MAX_UPLOAD_BYTES = max(1, int(os.getenv("ISM_MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024))))
 
-app = FastAPI(title="ISM Social Gateway", version="0.1.0")
+app = FastAPI(title="ISM Social Gateway", version="0.9.3")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+    allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:1430,http://tauri.localhost,tauri://localhost").split(",") if origin.strip()],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -155,6 +175,51 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_posts_due ON posts(status, auto_publish, scheduled_at);
             CREATE INDEX IF NOT EXISTS idx_posts_idempotency ON posts(idempotency_key);
+            CREATE TABLE IF NOT EXISTS processing_jobs (
+                id TEXT PRIMARY KEY,
+                pipeline_job_id TEXT,
+                source TEXT NOT NULL,
+                llm TEXT NOT NULL DEFAULT 'gemini',
+                captions TEXT NOT NULL DEFAULT 'classic',
+                status TEXT NOT NULL DEFAULT 'queued',
+                stage TEXT,
+                fraction REAL,
+                message TEXT,
+                error TEXT,
+                result_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_processing_jobs_updated ON processing_jobs(updated_at);
+            CREATE TABLE IF NOT EXISTS source_jobs (
+                id TEXT PRIMARY KEY,
+                source TEXT NOT NULL,
+                max_items INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'queued',
+                total INTEGER NOT NULL DEFAULT 0,
+                completed INTEGER NOT NULL DEFAULT 0,
+                message TEXT,
+                error TEXT,
+                items_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS analytics_snapshots (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                metric_date TEXT NOT NULL,
+                views INTEGER NOT NULL DEFAULT 0,
+                likes INTEGER NOT NULL DEFAULT 0,
+                comments INTEGER NOT NULL DEFAULT 0,
+                followers INTEGER,
+                watch_time_seconds INTEGER,
+                source TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                UNIQUE(account_id, metric_date),
+                FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_analytics_account_date ON analytics_snapshots(account_id, metric_date);
             """
         )
         migrations = [
@@ -180,8 +245,63 @@ async def auth(request: Request) -> None:
     if not GATEWAY_TOKEN:
         return
     supplied = request.headers.get("authorization", "")
-    if supplied != f"Bearer {GATEWAY_TOKEN}":
+    if not secrets.compare_digest(supplied, f"Bearer {GATEWAY_TOKEN}"):
         raise HTTPException(status_code=401, detail="Invalid Gateway token")
+
+
+class ProcessingPayload(BaseModel):
+    source: HttpUrl
+    llm: str = Field(default="gemini", pattern=r"^(gemini|ollama)$")
+    captions: str = Field(default="classic", min_length=1, max_length=40)
+    mode: str = Field(default="balanced", pattern=r"^(fast|balanced|quality|maximum)$")
+
+
+class SourcePayload(BaseModel):
+    source: HttpUrl
+    max_items: int = Field(default=0, ge=0, le=1000)
+
+
+class AIProviderPayload(BaseModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=160)
+    type: str = Field(min_length=1, max_length=40)
+    base_url: str = ""
+    credential_ref: str = ""
+    default_model: str = Field(min_length=1, max_length=160)
+    fallback_model: str = ""
+    enabled: bool = True
+    capabilities: dict[str, bool] = Field(default_factory=dict)
+
+
+class PersonalEventPayload(BaseModel):
+    event_type: str = Field(min_length=2, max_length=20)
+    clip_id: str = ""
+    candidate_id: str = ""
+    job_id: str = ""
+    reason: str = ""
+    timestamp: int | None = None
+    features: dict[str, Any] = Field(default_factory=dict)
+
+
+class PersonalSearchPayload(BaseModel):
+    selected: dict[str, Any]
+    candidates: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
+    limit: int = Field(default=10, ge=1, le=20)
+
+
+class FindBetterPayload(PersonalSearchPayload):
+    threshold: float = Field(default=5.0, ge=0.0, le=50.0)
+
+
+class AnalyticsSnapshotPayload(BaseModel):
+    account_id: str = Field(min_length=1, max_length=160)
+    metric_date: date
+    views: int = Field(default=0, ge=0)
+    likes: int = Field(default=0, ge=0)
+    comments: int = Field(default=0, ge=0)
+    followers: int | None = Field(default=None, ge=0)
+    watch_time_seconds: int | None = Field(default=None, ge=0)
+    source: str = Field(min_length=2, max_length=80)
 
 
 class AccountCreate(BaseModel):
@@ -217,6 +337,352 @@ class StatusUpdate(BaseModel):
     error: str | None = None
 
 
+def source_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["items"] = json.loads(result["items_json"]) if result.get("items_json") else []
+    result.pop("items_json", None)
+    return result
+
+
+def validate_processing_source(value: str) -> str:
+    parsed = urlparse(value)
+    public = urlparse(PUBLIC_BASE_URL)
+    if parsed.scheme in {"http", "https"} and parsed.hostname and public.hostname and parsed.hostname.lower() == public.hostname.lower():
+        prefix = f"{PUBLIC_BASE_URL}/v1/sources/jobs/"
+        if value.startswith(prefix) and "/media/" in value:
+            return value
+    return validate_public_source(value)
+
+
+def validate_public_source(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(status_code=422, detail="Source must be an HTTP or HTTPS URL.")
+    host = parsed.hostname.lower().rstrip(".")
+    blocked = {"localhost", "localhost.localdomain", "0.0.0.0", "::1"}
+    if host in blocked:
+        raise HTTPException(status_code=422, detail="Local network sources are not allowed.")
+
+    def reject_private(address_text: str) -> None:
+        address = ipaddress.ip_address(address_text)
+        if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved or address.is_multicast:
+            raise HTTPException(status_code=422, detail="Private network sources are not allowed.")
+
+    try:
+        reject_private(host)
+    except ValueError:
+        try:
+            addresses = {entry[4][0] for entry in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)}
+        except socket.gaierror as error:
+            raise HTTPException(status_code=422, detail="Source hostname could not be resolved.") from error
+        for address_text in addresses:
+            reject_private(address_text)
+    return value
+
+
+def ytdlp_module():
+    if str(PIPELINE_DIR) not in sys.path:
+        sys.path.insert(0, str(PIPELINE_DIR))
+    from publikclip_pipeline.ingest import ytdlp
+    return ytdlp
+
+
+def ytdlp_binary(module):
+    configured = Path(YTDLP_BIN)
+    if configured.is_file() and os.access(configured, os.X_OK):
+        return configured
+    discovered = shutil.which(YTDLP_BIN)
+    if discovered:
+        return Path(discovered)
+    return module.ensure_ytdlp(lambda _fraction, _message: None)
+
+
+def source_preview(source: str, max_items: int) -> list[dict[str, Any]]:
+    module = ytdlp_module()
+    binary = ytdlp_binary(module)
+    args = ["-J", "--flat-playlist", "--no-warnings"]
+    if max_items:
+        args += ["--playlist-end", str(max_items)]
+    raw = module._run(binary, args + [source])
+    payload = json.loads(raw)
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    if not entries:
+        entries = [payload]
+    result = []
+    for index, item in enumerate(entries):
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        webpage = item.get("webpage_url") or item.get("url") or source
+        result.append({
+            "index": index,
+            "id": str(item.get("id")),
+            "title": str(item.get("title") or "Untitled"),
+            "duration": item.get("duration"),
+            "url": str(webpage),
+            "thumbnail": item.get("thumbnail"),
+        })
+    if not result:
+        raise ValueError("The source did not contain downloadable video entries.")
+    return result
+
+
+def update_source_job(job_id: str, **values: Any) -> None:
+    if not values:
+        return
+    values["updated_at"] = now_iso()
+    assignments = ", ".join(f"{key}=?" for key in values)
+    parameters = list(values.values()) + [job_id]
+    with closing(db()) as connection:
+        connection.execute(f"UPDATE source_jobs SET {assignments} WHERE id=?", parameters)
+        connection.commit()
+
+
+def run_source_download(job_id: str, source: str, max_items: int) -> None:
+    target_dir = (SOURCE_ROOT / job_id).resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        module = ytdlp_module()
+        binary = ytdlp_binary(module)
+        output_template = str(target_dir / "%(playlist_index)05d - %(title)s.%(ext)s")
+        args = [
+            "--newline", "--no-warnings", "--yes-playlist", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "--merge-output-format", "mp4", "-o", output_template,
+        ]
+        if max_items:
+            args += ["--playlist-end", str(max_items)]
+        update_source_job(job_id, status="running", message="Downloading source entries")
+        module._run(binary, args + [source], on_line=lambda line: update_source_job(job_id, message=line[-300:]))
+        files = sorted(target_dir.glob("*.mp4"))
+        if not files:
+            raise ValueError("Download finished without MP4 files.")
+        items = [
+            {"index": index, "title": path.stem, "path": str(path), "media_url": f"{PUBLIC_BASE_URL}/v1/sources/jobs/{job_id}/media/{quote(path.name, safe='')}"}
+            for index, path in enumerate(files)
+        ]
+        update_source_job(job_id, status="done", total=len(items), completed=len(items), message="Downloads ready", items_json=json.dumps(items, ensure_ascii=False))
+    except Exception as error:  # noqa: BLE001 — persist user-facing worker failure
+        update_source_job(job_id, status="failed", error=str(error), message="Source download failed")
+
+
+def provider_config_path() -> Path:
+    PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
+    return PROCESSING_ROOT / "providers.json"
+
+
+def read_provider_profiles() -> list[dict[str, Any]]:
+    path = provider_config_path()
+    try:
+        payload = json.loads(path.read_text()) if path.exists() else []
+    except (OSError, json.JSONDecodeError):
+        return []
+    profiles = payload if isinstance(payload, list) else payload.get("providers", [])
+    return [item for item in profiles if isinstance(item, dict) and item.get("id")]
+
+
+def write_provider_profiles(profiles: list[dict[str, Any]]) -> None:
+    path = provider_config_path()
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"providers": profiles}, ensure_ascii=False, indent=2))
+    temporary.replace(path)
+
+
+def public_provider_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": profile.get("id", ""),
+        "name": profile.get("name", ""),
+        "type": profile.get("type", ""),
+        "base_url": profile.get("base_url", ""),
+        "credential_ref": profile.get("credential_ref", ""),
+        "default_model": profile.get("default_model", ""),
+        "fallback_model": profile.get("fallback_model", ""),
+        "enabled": bool(profile.get("enabled", True)),
+        "capabilities": profile.get("capabilities", {}),
+        "credential_configured": bool(profile.get("credential_ref")),
+    }
+
+
+def processing_dict(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    result["results"] = json.loads(result["result_json"]) if result.get("result_json") else None
+    result.pop("result_json", None)
+    return result
+
+
+def update_processing_job(job_id: str, **values: Any) -> None:
+    if not values:
+        return
+    values["updated_at"] = now_iso()
+    assignments = ", ".join(f"{key}=?" for key in values)
+    parameters = list(values.values()) + [job_id]
+    with closing(db()) as connection:
+        connection.execute(f"UPDATE processing_jobs SET {assignments} WHERE id=?", parameters)
+        connection.commit()
+
+
+def read_pipeline_checkpoint(job_dir: Path, name: str) -> dict[str, Any] | None:
+    path = job_dir / f"{name}.json"
+    try:
+        payload = json.loads(path.read_text())
+        data = payload.get("data")
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def processing_results(external_id: str, pipeline_job_id: str) -> dict[str, Any]:
+    job_dir = PROCESSING_ROOT / "jobs" / pipeline_job_id
+    ingest = read_pipeline_checkpoint(job_dir, "ingest") or {}
+    score = read_pipeline_checkpoint(job_dir, "score")
+    render = read_pipeline_checkpoint(job_dir, "render") or {}
+    events = read_pipeline_checkpoint(job_dir, "events")
+    candidates = read_pipeline_checkpoint(job_dir, "candidates")
+    outputs = []
+    for output in render.get("outputs", []):
+        filename = Path(str(output.get("path", ""))).name
+        if not filename:
+            continue
+        item = dict(output)
+        item["path"] = f"{PUBLIC_BASE_URL}/v1/processing/jobs/{external_id}/media/{filename}"
+        outputs.append(item)
+    return {
+        "job_id": external_id,
+        "dir": str(job_dir),
+        "ingest": {key: ingest.get(key) for key in ("title", "heatmap", "probe")} if ingest else None,
+        "score": score,
+        "render": {**render, "outputs": outputs} if render else None,
+        "events": events,
+        "candidates": candidates,
+    }
+
+
+def read_server_gemini_key() -> str | None:
+    key = os.getenv("PUBLIKCLIP_GEMINI_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        key = GEMINI_KEY_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return key or None
+
+
+def pipeline_checks() -> dict[str, Any]:
+    manifest = PIPELINE_DIR / "pyproject.toml"
+    package = PIPELINE_DIR / "publikclip_pipeline"
+    uv_path = shutil.which("uv")
+    ffmpeg_path = shutil.which("ffmpeg")
+    ffprobe_path = shutil.which("ffprobe")
+    storage_ok = False
+    try:
+        PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
+        storage_ok = os.access(PROCESSING_ROOT, os.W_OK)
+    except OSError:
+        storage_ok = False
+    return {
+        "pipeline": manifest.is_file() and package.is_dir(),
+        "pipeline_dir_configured": manifest.is_file() and package.is_dir(),
+        "python": sys.version_info >= (3, 12) or bool(uv_path),
+        "uv": bool(uv_path),
+        "ffmpeg": bool(ffmpeg_path),
+        "ffprobe": bool(ffprobe_path),
+        "storage": storage_ok,
+        "gemini_configured": bool(read_server_gemini_key()),
+        "ollama": ollama_available(),
+        "youtube_urls": True,
+        "https_urls": True,
+        "android_remote_processing": True,
+    }
+
+
+def ollama_available() -> bool:
+    try:
+        with urlopen(UrlRequest("http://127.0.0.1:11434/api/tags"), timeout=1.5) as response:
+            return response.status == 200
+    except (OSError, URLError):
+        return False
+
+
+def pipeline_command() -> tuple[list[str], dict[str, str]]:
+    environment = os.environ.copy()
+    server_key = read_server_gemini_key()
+    if server_key:
+        environment["PUBLIKCLIP_GEMINI_API_KEY"] = server_key
+    environment["PUBLIKCLIP_HOME"] = str(PROCESSING_ROOT)
+    environment["PYTHONPATH"] = f"{PIPELINE_DIR}{os.pathsep}{environment.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+    if PIPELINE_BIN:
+        return [PIPELINE_BIN, "--jsonl"], environment
+    uv = shutil.which("uv")
+    if uv and (PIPELINE_DIR / "pyproject.toml").exists():
+        return [uv, "run", "--project", str(PIPELINE_DIR), "publikclip", "--jsonl"], environment
+    return [sys.executable, "-m", "publikclip_pipeline.cli", "--jsonl"], environment
+
+
+def uploaded_source_path(source: str) -> str | None:
+    parsed = urlparse(source)
+    public = urlparse(PUBLIC_BASE_URL)
+    if parsed.hostname != public.hostname:
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 5 or parts[:3] != ["v1", "sources", "jobs"] or parts[4] != "media":
+        return None
+    job_id = parts[3]
+    filename = Path("/".join(parts[5:])).name
+    if not filename or job_id.startswith("."):
+        return None
+    candidate = (SOURCE_ROOT / job_id / filename).resolve()
+    root = SOURCE_ROOT.resolve()
+    return str(candidate) if root in candidate.parents and candidate.is_file() else None
+
+
+def run_processing_job(external_id: str, source: str, llm: str, captions: str, mode: str = "balanced") -> None:
+    command, environment = pipeline_command()
+    pipeline_source = uploaded_source_path(source) or source
+    command.extend(["run", pipeline_source, "--llm", llm, "--captions", captions, "--mode", mode])
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(PIPELINE_DIR.parent),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        update_processing_job(external_id, status="running", message="Pipeline started")
+        final: dict[str, Any] | None = None
+        assert process.stdout is not None
+        for line in process.stdout:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event") == "job":
+                update_processing_job(external_id, pipeline_job_id=event.get("job_id"), message="Job created")
+            elif event.get("event") == "progress":
+                update_processing_job(
+                    external_id,
+                    status="running",
+                    stage=event.get("stage"),
+                    fraction=event.get("fraction"),
+                    message=event.get("message"),
+                )
+            elif event.get("event") == "result":
+                final = event
+        return_code = process.wait()
+        if return_code != 0 or not final or not final.get("ok"):
+            detail = (final or {}).get("error") or f"Pipeline exited with code {return_code}."
+            update_processing_job(external_id, status="failed", error=str(detail), message="Pipeline failed")
+            return
+        pipeline_job_id = str(final.get("job_id") or "")
+        if not pipeline_job_id:
+            update_processing_job(external_id, status="failed", error="Pipeline returned no job id.", message="Pipeline failed")
+            return
+        results = processing_results(external_id, pipeline_job_id)
+        update_processing_job(external_id, pipeline_job_id=pipeline_job_id, status="done", fraction=1.0, stage="render", message="Clips ready", result_json=json.dumps(results, ensure_ascii=False))
+    except Exception as error:  # noqa: BLE001 — persist user-facing worker failure
+        update_processing_job(external_id, status="failed", error=str(error), message="Gateway worker failed")
+
+
 def account_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -250,12 +716,20 @@ def row_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def save_post(payload: PostPayload, post_id: str | None = None) -> dict[str, Any]:
     identifier = post_id or payload.id or f"post_{secrets.token_urlsafe(10)}"
-    scheduled = parse_time(payload.scheduledAt)
+    try:
+        scheduled = parse_time(payload.scheduledAt)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="scheduledAt must be a valid ISO-8601 timestamp") from error
     scheduled_iso = scheduled.isoformat() if scheduled else None
+    media_url = validate_public_source(str(payload.mediaUrl))
     timestamp = now_iso()
     status = payload.status if payload.status in {"draft", "awaiting_approval", "scheduled"} else "scheduled"
     with closing(db()) as connection:
         account = account_for_post(connection, payload)
+        if account and account["platform"] != payload.platform:
+            raise HTTPException(status_code=422, detail="Account platform does not match post platform")
+        if (payload.autoPublish or status == "scheduled") and not account:
+            raise HTTPException(status_code=422, detail="A connected account is required for scheduled or automatic publishing")
         account_id = account["id"] if account else payload.account_id
         account_name = account["account_name"] if account else payload.account
         key = idempotency_key(payload, scheduled_iso)
@@ -273,11 +747,11 @@ def save_post(payload: PostPayload, post_id: str | None = None) -> dict[str, Any
               media_url=excluded.media_url, title=excluded.title, caption=excluded.caption,
               description=excluded.description, hashtags=excluded.hashtags, keywords=excluded.keywords,
               scheduled_at=excluded.scheduled_at, auto_publish=excluded.auto_publish,
-              status=CASE WHEN posts.status IN ('published', 'cancelled') THEN posts.status ELSE excluded.status END,
+              status=CASE WHEN posts.status IN ('published', 'cancelled', 'publishing') THEN posts.status ELSE excluded.status END,
               idempotency_key=excluded.idempotency_key, next_attempt_at=NULL, error=NULL, updated_at=excluded.updated_at
             """,
             (
-                identifier, payload.platform, account_id, account_name, str(payload.mediaUrl),
+                identifier, payload.platform, account_id, account_name, media_url,
                 payload.title, payload.caption, payload.description, payload.hashtags, payload.keywords,
                 scheduled_iso, int(payload.autoPublish), status, key, None, timestamp, timestamp,
             ),
@@ -321,11 +795,14 @@ async def publish_job(post_id: str) -> dict[str, Any] | None:
             )
             connection.commit()
             return await get_post(post_id)
-        connection.execute(
-            "UPDATE posts SET status='publishing', attempts=attempts+1, error=NULL, next_attempt_at=NULL, updated_at=? WHERE id=?",
+        claimed = connection.execute(
+            "UPDATE posts SET status='publishing', attempts=attempts+1, error=NULL, next_attempt_at=NULL, updated_at=? WHERE id=? AND status IN ('scheduled', 'failed')",
             (now_iso(), post_id),
         )
         connection.commit()
+        if claimed.rowcount == 0:
+            current = connection.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
+            return row_dict(current) if current else None
         row = connection.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
 
     result = await provider_publish(row)
@@ -401,6 +878,11 @@ async def scheduler_loop() -> None:
 async def startup() -> None:
     global _scheduler_task
     init_db()
+    with closing(db()) as connection:
+        timestamp = now_iso()
+        connection.execute("UPDATE processing_jobs SET status='failed', error='Gateway restarted before this task completed. Start it again.', message='Interrupted by Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
+        connection.execute("UPDATE source_jobs SET status='failed', error='Gateway restarted before this download completed. Start it again.', message='Interrupted by Gateway restart', updated_at=? WHERE status IN ('queued', 'running')", (timestamp,))
+        connection.commit()
     _scheduler_task = asyncio.create_task(scheduler_loop())
 
 
@@ -411,14 +893,326 @@ async def shutdown() -> None:
         await asyncio.gather(_scheduler_task, return_exceptions=True)
 
 
+def gemini_probe() -> dict[str, Any]:
+    key = read_server_gemini_key()
+    result: dict[str, Any] = {"configured": bool(key), "reachable": False, "model": GEMINI_MODEL, "latency_ms": None, "error_code": None}
+    if not key:
+        result["error_code"] = "GEMINI_NOT_CONFIGURED"
+        return result
+    body = json.dumps({"contents": [{"parts": [{"text": "Reply with the single word OK."}]}], "generationConfig": {"maxOutputTokens": 4}}).encode()
+    request = UrlRequest(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+        data=body,
+        headers={"Content-Type": "application/json", "x-goog-api-key": key},
+        method="POST",
+    )
+    started = time_module.monotonic()
+    try:
+        with urlopen(request, timeout=15) as response:
+            response.read(1024)
+            result["reachable"] = response.status == 200
+            result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
+            if response.status != 200:
+                result["error_code"] = f"GEMINI_HTTP_{response.status}"
+    except HTTPError as error:
+        result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
+        result["error_code"] = {401: "GEMINI_AUTH_FAILED", 403: "GEMINI_AUTH_FAILED", 404: "GEMINI_MODEL_NOT_FOUND", 429: "GEMINI_QUOTA_OR_RATE_LIMIT"}.get(error.code, f"GEMINI_HTTP_{error.code}")
+    except (OSError, URLError, TimeoutError):
+        result["latency_ms"] = round((time_module.monotonic() - started) * 1000, 1)
+        result["error_code"] = "GEMINI_UNREACHABLE"
+    return result
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "provider_mode": PROVIDER_MODE, "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS}
+    checks = pipeline_checks()
+    with closing(db()) as connection:
+        processing_active = connection.execute("SELECT COUNT(*) AS count FROM processing_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+        source_active = connection.execute("SELECT COUNT(*) AS count FROM source_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+    ready = bool(checks["pipeline"] and checks["ffmpeg"] and checks["storage"])
+    return {"status": "ok" if ready else "degraded", "ok": ready, "provider_mode": PROVIDER_MODE, "auth_configured": bool(GATEWAY_TOKEN), "pipeline": checks["pipeline"], "python": checks["python"], "ffmpeg": checks["ffmpeg"], "gemini_configured": checks["gemini_configured"], "storage": checks["storage"], "scheduler_interval_seconds": PUBLISH_INTERVAL_SECONDS, "processing_active": processing_active, "source_active": source_active}
+
+
+@app.get("/v1/processing/capabilities", dependencies=[Depends(auth)])
+async def processing_capabilities() -> dict[str, Any]:
+    return pipeline_checks()
+
+
+@app.post("/v1/diagnostics/gemini", dependencies=[Depends(auth)])
+async def diagnostics_gemini() -> dict[str, Any]:
+    return await asyncio.to_thread(gemini_probe)
+
+
+@app.post("/v1/diagnostics/pipeline", dependencies=[Depends(auth)])
+async def diagnostics_pipeline() -> dict[str, Any]:
+    checks = pipeline_checks()
+    importable = False
+    if checks["pipeline"]:
+        pipeline_text = str(PIPELINE_DIR)
+        if pipeline_text not in sys.path:
+            sys.path.insert(0, pipeline_text)
+        importable = importlib.util.find_spec("publikclip_pipeline") is not None
+    checks["pipeline_importable"] = importable
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        try:
+            checks["ffmpeg_usable"] = subprocess.run([ffmpeg, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            checks["ffmpeg_usable"] = False
+    else:
+        checks["ffmpeg_usable"] = False
+    checks["ready"] = bool(checks["pipeline"] and checks["pipeline_importable"] and checks["python"] and checks["ffmpeg_usable"] and checks["storage"])
+    return checks
+
+
+@app.get("/v1/ai/providers", dependencies=[Depends(auth)])
+async def list_ai_providers() -> dict[str, Any]:
+    return {"providers": [public_provider_profile(item) for item in read_provider_profiles()]}
+
+
+@app.post("/v1/ai/providers", dependencies=[Depends(auth)])
+async def save_ai_provider(payload: AIProviderPayload) -> dict[str, Any]:
+    profiles = read_provider_profiles()
+    item = payload.model_dump()
+    profiles = [profile for profile in profiles if profile.get("id") != payload.id]
+    profiles.append(item)
+    write_provider_profiles(profiles)
+    return {"provider": public_provider_profile(item), "status": "saved"}
+
+
+@app.delete("/v1/ai/providers/{provider_id}", dependencies=[Depends(auth)])
+async def delete_ai_provider(provider_id: str) -> dict[str, Any]:
+    profiles = read_provider_profiles()
+    filtered = [profile for profile in profiles if profile.get("id") != provider_id]
+    if len(filtered) == len(profiles):
+        raise HTTPException(status_code=404, detail="AI provider not found")
+    write_provider_profiles(filtered)
+    return {"id": provider_id, "status": "deleted"}
+
+
+def personal_state_path() -> Path:
+    PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
+    return PROCESSING_ROOT / "personal_taste.json"
+
+
+@app.get("/v1/personal/profile", dependencies=[Depends(auth)])
+async def personal_profile() -> dict[str, Any]:
+    from .personal_taste import load_state
+    state = load_state(personal_state_path())
+    return {"profile": state["profile"], "event_count": len(state["events"])}
+
+
+@app.post("/v1/personal/events", dependencies=[Depends(auth)])
+async def personal_event(payload: PersonalEventPayload) -> dict[str, Any]:
+    from .personal_taste import record_event
+    try:
+        return record_event(personal_state_path(), payload.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/v1/personal/more-like-this", dependencies=[Depends(auth)])
+async def more_like_this(payload: PersonalSearchPayload) -> dict[str, Any]:
+    from .personal_taste import load_state, similarity_recommendations
+    state = load_state(personal_state_path())
+    return {"results": similarity_recommendations(state["profile"], payload.selected, payload.candidates, payload.limit)}
+
+
+@app.post("/v1/personal/find-better", dependencies=[Depends(auth)])
+async def find_better(payload: FindBetterPayload) -> dict[str, Any]:
+    from .personal_taste import better_recommendations, load_state
+    state = load_state(personal_state_path())
+    return {"results": better_recommendations(state["profile"], payload.selected, payload.candidates, payload.threshold), "threshold": payload.threshold}
 
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard() -> str:
     return DASHBOARD_HTML
+
+
+@app.post("/v1/sources/inspect", dependencies=[Depends(auth)])
+async def inspect_source(payload: SourcePayload) -> dict[str, Any]:
+    source = validate_public_source(str(payload.source))
+    preview_limit = payload.max_items or 50
+    try:
+        items = await asyncio.to_thread(source_preview, source, preview_limit)
+    except Exception as error:  # noqa: BLE001 — normalize extractor errors
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"source": source, "count": len(items), "items": items}
+
+
+@app.post("/v1/sources/upload", dependencies=[Depends(auth)])
+async def upload_source(request: Request) -> dict[str, Any]:
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
+    upload_id = f"upl_{secrets.token_urlsafe(12)}"
+    directory = (SOURCE_ROOT / upload_id).resolve()
+    directory.mkdir(parents=True, exist_ok=False)
+    target = directory / "source.mp4"
+    size = 0
+    try:
+        with target.open("wb") as output:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Uploaded video exceeds the configured size limit.")
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="Uploaded video is empty.")
+        timestamp = now_iso()
+        source_url = f"{PUBLIC_BASE_URL}/v1/sources/jobs/{upload_id}/media/source.mp4"
+        items = [{"index": 0, "title": "Uploaded video", "url": source_url, "filename": "source.mp4", "bytes": size}]
+        with closing(db()) as connection:
+            connection.execute(
+                "INSERT INTO source_jobs (id, source, max_items, status, total, completed, items_json, created_at, updated_at) VALUES (?, ?, 0, 'done', 1, 1, ?, ?, ?)",
+                (upload_id, f"upload:{upload_id}", json.dumps(items, ensure_ascii=False), timestamp, timestamp),
+            )
+            connection.commit()
+        return {"id": upload_id, "status": "done", "source": source_url, "filename": "source.mp4", "bytes": size}
+    except HTTPException:
+        target.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    except Exception as error:
+        target.unlink(missing_ok=True)
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Video upload failed: {error}") from error
+
+
+@app.post("/v1/sources/download", dependencies=[Depends(auth)])
+async def download_source(payload: SourcePayload) -> dict[str, Any]:
+    source = validate_public_source(str(payload.source))
+    job_id = f"src_{secrets.token_urlsafe(12)}"
+    timestamp = now_iso()
+    SOURCE_ROOT.mkdir(parents=True, exist_ok=True)
+    with closing(db()) as connection:
+        existing = connection.execute("SELECT id, status FROM source_jobs WHERE source=? AND max_items=? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1", (source, payload.max_items)).fetchone()
+        if existing:
+            return {"id": existing["id"], "status": existing["status"], "reused": True}
+        active = connection.execute("SELECT COUNT(*) AS count FROM source_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+        if active >= MAX_ACTIVE_SOURCE_JOBS:
+            raise HTTPException(status_code=429, detail="Too many source downloads are active. Wait for one to finish.")
+        connection.execute(
+            "INSERT INTO source_jobs (id, source, max_items, status, created_at, updated_at) VALUES (?, ?, ?, 'queued', ?, ?)",
+            (job_id, source, payload.max_items, timestamp, timestamp),
+        )
+        connection.commit()
+    asyncio.create_task(asyncio.to_thread(run_source_download, job_id, source, payload.max_items))
+    return {"id": job_id, "status": "queued"}
+
+
+@app.get("/v1/sources/jobs/{job_id}", dependencies=[Depends(auth)])
+async def source_status(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM source_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Source job not found")
+    return source_dict(row)
+
+
+@app.get("/v1/sources/jobs/{job_id}/media/{filename:path}")
+async def source_media(job_id: str, filename: str) -> FileResponse:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT status FROM source_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row or row["status"] != "done":
+        raise HTTPException(status_code=404, detail="Source media is not ready")
+    base = (SOURCE_ROOT / job_id).resolve()
+    target = (base / filename).resolve()
+    if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="Source media not found")
+    return FileResponse(target, media_type="video/mp4", filename=target.name)
+
+
+@app.post("/v1/processing/jobs", dependencies=[Depends(auth)])
+async def start_processing(payload: ProcessingPayload) -> dict[str, Any]:
+    source = validate_processing_source(str(payload.source))
+    job_id = f"proc_{secrets.token_urlsafe(12)}"
+    timestamp = now_iso()
+    PROCESSING_ROOT.mkdir(parents=True, exist_ok=True)
+    with closing(db()) as connection:
+        existing = connection.execute("SELECT id, status FROM processing_jobs WHERE source=? AND llm=? AND captions=? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1", (source, payload.llm, payload.captions)).fetchone()
+        if existing:
+            return {"id": existing["id"], "status": existing["status"], "reused": True}
+        active = connection.execute("SELECT COUNT(*) AS count FROM processing_jobs WHERE status IN ('queued', 'running')").fetchone()["count"]
+        if active >= MAX_ACTIVE_PROCESSING_JOBS:
+            raise HTTPException(status_code=429, detail="A processing job is already active. Wait for it to finish.")
+        connection.execute(
+            "INSERT INTO processing_jobs (id, source, llm, captions, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
+            (job_id, source, payload.llm, payload.captions, timestamp, timestamp),
+        )
+        connection.commit()
+    asyncio.create_task(asyncio.to_thread(run_processing_job, job_id, source, payload.llm, payload.captions, payload.mode))
+    return {"id": job_id, "status": "queued"}
+
+
+@app.get("/v1/processing/jobs/{job_id}", dependencies=[Depends(auth)])
+async def processing_status(job_id: str) -> dict[str, Any]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT * FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Processing job not found")
+    return processing_dict(row)
+
+
+@app.get("/v1/processing/jobs/{job_id}/media/{filename:path}")
+async def processing_media(job_id: str, filename: str) -> FileResponse:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT pipeline_job_id, status FROM processing_jobs WHERE id=?", (job_id,)).fetchone()
+    if not row or row["status"] != "done" or not row["pipeline_job_id"]:
+        raise HTTPException(status_code=404, detail="Processing media is not ready")
+    base = (PROCESSING_ROOT / "jobs" / row["pipeline_job_id"] / "clips").resolve()
+    target = (base / filename).resolve()
+    if base not in target.parents or not target.is_file() or target.suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="Media not found")
+    return FileResponse(target, media_type="video/mp4", filename=target.name)
+
+
+@app.post("/v1/analytics/snapshots", dependencies=[Depends(auth)])
+async def save_analytics_snapshot(payload: AnalyticsSnapshotPayload) -> dict[str, Any]:
+    timestamp = now_iso()
+    with closing(db()) as connection:
+        account = connection.execute("SELECT id, platform FROM accounts WHERE id=?", (payload.account_id,)).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if account["platform"] != payload.source.split(":", 1)[0].lower() and payload.source != "manual":
+            raise HTTPException(status_code=422, detail="Analytics source does not match account platform")
+        snapshot_id = f"metric_{secrets.token_urlsafe(10)}"
+        connection.execute(
+            """INSERT INTO analytics_snapshots (id, account_id, platform, metric_date, views, likes, comments, followers, watch_time_seconds, source, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(account_id, metric_date) DO UPDATE SET views=excluded.views, likes=excluded.likes,
+                 comments=excluded.comments, followers=excluded.followers, watch_time_seconds=excluded.watch_time_seconds,
+                 source=excluded.source, fetched_at=excluded.fetched_at""",
+            (snapshot_id, payload.account_id, account["platform"], payload.metric_date.isoformat(), payload.views, payload.likes, payload.comments, payload.followers, payload.watch_time_seconds, payload.source, timestamp),
+        )
+        connection.commit()
+    return {"account_id": payload.account_id, "metric_date": payload.metric_date.isoformat(), "status": "stored", "source": payload.source, "fetched_at": timestamp}
+
+
+@app.get("/v1/analytics/summary", dependencies=[Depends(auth)])
+async def analytics_summary(days: int = 30) -> dict[str, Any]:
+    days = max(1, min(days, 90))
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days - 1)).isoformat()
+    with closing(db()) as connection:
+        rows = connection.execute(
+            """SELECT a.id, a.platform, a.account_name, s.metric_date, s.views, s.likes, s.comments,
+                      s.followers, s.watch_time_seconds, s.source, s.fetched_at
+               FROM accounts a LEFT JOIN analytics_snapshots s ON s.account_id=a.id AND s.metric_date>=?
+               ORDER BY a.created_at DESC, s.metric_date ASC""",
+            (cutoff,),
+        ).fetchall()
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = grouped.setdefault(row["id"], {"account_id": row["id"], "platform": row["platform"], "account_name": row["account_name"], "data_available": False, "days": []})
+        if row["metric_date"]:
+            item["data_available"] = True
+            item["days"].append({key: row[key] for key in ("metric_date", "views", "likes", "comments", "followers", "watch_time_seconds", "source", "fetched_at")})
+    accounts_data = list(grouped.values())
+    totals = {"views": sum(day["views"] for account in accounts_data for day in account["days"]), "likes": sum(day["likes"] for account in accounts_data for day in account["days"]), "comments": sum(day["comments"] for account in accounts_data for day in account["days"])}
+    return {"days": days, "from": cutoff, "to": datetime.now(timezone.utc).date().isoformat(), "totals": totals, "accounts": accounts_data}
 
 
 @app.get("/v1/dashboard/summary", dependencies=[Depends(auth)])
@@ -439,6 +1233,8 @@ async def accounts() -> list[dict[str, Any]]:
 
 @app.post("/v1/accounts/mock", dependencies=[Depends(auth)])
 async def create_mock_account(payload: AccountCreate) -> dict[str, Any]:
+    if PROVIDER_MODE != "mock":
+        raise HTTPException(status_code=404, detail="Mock account endpoint is disabled outside mock mode")
     account_id = f"acct_{secrets.token_urlsafe(8)}"
     timestamp = now_iso()
     with closing(db()) as connection:
@@ -449,6 +1245,18 @@ async def create_mock_account(payload: AccountCreate) -> dict[str, Any]:
         connection.commit()
         row = connection.execute("SELECT * FROM accounts WHERE id=?", (account_id,)).fetchone()
     return account_dict(row)
+
+
+@app.delete("/v1/accounts/{account_id}", dependencies=[Depends(auth)])
+async def disconnect_account(account_id: str) -> dict[str, str]:
+    with closing(db()) as connection:
+        row = connection.execute("SELECT id FROM accounts WHERE id=?", (account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Account not found")
+        connection.execute("UPDATE posts SET account_id=NULL WHERE account_id=?", (account_id,))
+        connection.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+        connection.commit()
+    return {"id": account_id, "status": "disconnected"}
 
 
 @app.patch("/v1/accounts/{account_id}/policy", dependencies=[Depends(auth)])
@@ -479,15 +1287,41 @@ async def resume_account(account_id: str) -> dict[str, Any]:
     return account_dict(row)
 
 
+@app.get("/v1/social/capabilities", dependencies=[Depends(auth)])
+async def social_capabilities() -> dict[str, Any]:
+    configured = {platform: PROVIDER_MODE == "mock" for platform in ("instagram", "facebook", "tiktok", "youtube", "x")}
+    credentials_present = {
+        "instagram": bool(os.getenv("META_CLIENT_ID") and os.getenv("META_CLIENT_SECRET")),
+        "facebook": bool(os.getenv("META_CLIENT_ID") and os.getenv("META_CLIENT_SECRET")),
+        "tiktok": bool(os.getenv("TIKTOK_CLIENT_KEY") and os.getenv("TIKTOK_CLIENT_SECRET")),
+        "youtube": bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET")),
+        "x": bool(os.getenv("X_CLIENT_ID") and os.getenv("X_CLIENT_SECRET")),
+    }
+    return {
+        "mode": PROVIDER_MODE,
+        "providers": [
+            {"platform": "instagram", "configured": configured["instagram"], "credentials_present": credentials_present["instagram"], "publish_mode": "professional account direct post", "analytics": "Instagram Insights", "note": "Requires Instagram professional account and Meta permissions."},
+            {"platform": "facebook", "configured": configured["facebook"], "credentials_present": credentials_present["facebook"], "publish_mode": "Page publishing", "analytics": "Page insights", "note": "Requires Page access and Meta app review where applicable."},
+            {"platform": "tiktok", "configured": configured["tiktok"], "credentials_present": credentials_present["tiktok"], "publish_mode": "Direct Post or Draft", "analytics": "Display/approved business scope", "note": "The provider may require product approval; Draft mode is supported by design."},
+            {"platform": "youtube", "configured": configured["youtube"], "credentials_present": credentials_present["youtube"], "publish_mode": "videos.insert", "analytics": "YouTube Analytics", "note": "Uses Google OAuth and resumable uploads."},
+            {"platform": "x", "configured": configured["x"], "credentials_present": credentials_present["x"], "publish_mode": "chunked media + post", "analytics": "public/private metrics", "note": "Private metrics require user context and have provider-specific windows."},
+        ],
+    }
+
+
 @app.get("/v1/social/oauth/{platform}/start", dependencies=[Depends(auth)])
 async def oauth_start(platform: str) -> dict[str, str]:
     if platform not in {"instagram", "facebook", "tiktok", "youtube", "x"}:
         raise HTTPException(status_code=400, detail="Unsupported platform")
-    return {"url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}"}
+    if PROVIDER_MODE == "mock":
+        return {"url": f"{PUBLIC_BASE_URL}/oauth/mock/complete?platform={platform}"}
+    raise HTTPException(status_code=501, detail=f"Live OAuth adapter for {platform} is not configured in this Gateway build")
 
 
 @app.get("/oauth/mock/complete", response_class=HTMLResponse)
 async def oauth_complete(platform: str) -> str:
+    if PROVIDER_MODE != "mock":
+        raise HTTPException(status_code=404, detail="Mock OAuth callback is disabled outside mock mode")
     account_id = f"acct_{secrets.token_urlsafe(8)}"
     timestamp = now_iso()
     with closing(db()) as connection:
@@ -513,15 +1347,18 @@ async def schedule(payload: PostPayload) -> dict[str, Any]:
 
 @app.patch("/v1/social/schedule/{post_id}", dependencies=[Depends(auth)])
 async def update_schedule(post_id: str, payload: PostPayload) -> dict[str, Any]:
-    if not await get_post(post_id):
+    existing = await get_post(post_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Post not found")
+    if existing["status"] in {"publishing", "published", "cancelled"}:
+        raise HTTPException(status_code=409, detail=f"Post cannot be edited while status is {existing['status']}")
     return save_post(payload, post_id=post_id)
 
 
 @app.delete("/v1/social/schedule/{post_id}", dependencies=[Depends(auth)])
 async def cancel_schedule(post_id: str) -> dict[str, Any]:
     with closing(db()) as connection:
-        cursor = connection.execute("UPDATE posts SET status='cancelled', updated_at=? WHERE id=? AND status NOT IN ('published', 'cancelled')", (now_iso(), post_id))
+        cursor = connection.execute("UPDATE posts SET status='cancelled', updated_at=? WHERE id=? AND status IN ('draft', 'awaiting_approval', 'scheduled', 'failed')", (now_iso(), post_id))
         connection.commit()
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Post not found or already final")
@@ -537,6 +1374,8 @@ async def publish(payload: PostPayload) -> dict[str, Any]:
 
 @app.get("/mock/published/{provider_id}")
 async def mock_published(provider_id: str) -> dict[str, str]:
+    if PROVIDER_MODE != "mock":
+        raise HTTPException(status_code=404, detail="Mock publication endpoint is disabled outside mock mode")
     return {"status": "published", "provider_post_id": provider_id, "mode": "mock"}
 
 

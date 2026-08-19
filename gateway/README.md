@@ -14,7 +14,35 @@ pip install -r requirements.txt
 PROVIDER_MODE=mock uvicorn main:app --host 0.0.0.0 --port 8787
 ```
 
-افتح `http://127.0.0.1:8787` لعرض لوحة التحكم. في تطبيق ISM، ضع `http://127.0.0.1:8787` في حقل **Gateway API URL**. عناوين HTTP مسموحة محليًا فقط؛ يجب استخدام HTTPS خارج الجهاز.
+افتح `http://127.0.0.1:8787` لعرض لوحة التحكم. في تطبيق ISM، ضع عنوان Gateway في حقل **Gateway API URL**. في APK Debug يمكن استخدام عنوان LAN مثل `http://192.168.1.10:8787` إذا كان الهاتف والخادم على الشبكة نفسها؛ أما العنوان العام فيجب أن يكون HTTPS.
+
+## مكتبة المصادر v0.6
+
+تدعم Gateway الآن معاينة وتنزيل رابط فيديو مفرد أو قناة أو قائمة تشغيل عبر `POST /v1/sources/inspect` و`POST /v1/sources/download`. يتابع التطبيق المهمة عبر `GET /v1/sources/jobs/{id}`، وتُخدم الملفات الناتجة من `GET /v1/sources/jobs/{id}/media/{filename}`. يطبق Gateway حدًا أقصى قدره 1000 عنصر للمهمة، ويمنع عناوين localhost والشبكات الخاصة لتقليل مخاطر SSRF. استخدم هذه الميزة فقط للمصادر التي يملك المستخدم حق تنزيلها أو معالجتها، والتزم بشروط كل منصة.
+
+## Security and reliability v0.9
+
+يستخدم تطبيق الواجهة عنوان Gateway في `localStorage`، بينما يُحفظ bearer token في `sessionStorage` فقط ويُرحّل الرمز القديم من التخزين الدائم ثم يُحذف. يقيّد Gateway CORS افتراضياً بأصول Tauri/التطوير، ويجب ضبط `CORS_ORIGINS` صراحة في الإنتاج. توجد اختبارات انحدار لرفض `localhost` وعناوين الشبكات الخاصة ومصادر `file://`، كما تُستخدم حدود الملفات وروابط الوسائط غير القابلة للتخمين. لا يعتمد النظام على تدوير IP أو proxy لتجاوز حظر المنصات؛ يستخدم بدلاً منه حدود الحساب والتبريد والتوقف الآمن عند أخطاء OAuth أو 401/403/429.
+
+## Analytics v0.8
+
+يوفر Gateway مسار `GET /v1/analytics/summary?days=30` لقراءة اللقطات اليومية، ومسار `POST /v1/analytics/snapshots` لإدخال نتيجة مزامنة من موصل رسمي. تُحفظ المشاهدات والإعجابات والتعليقات والمتابعون ووقت المشاهدة مع `source` و`fetched_at`، ويعرض التطبيق البيانات المفقودة بوضوح. هذا العقد لا يخترع أرقاماً ولا يجمع بيانات من صفحات المنصات؛ يجب أن يملأه موصل OAuth رسمي يملك الصلاحيات المناسبة.
+
+## معالجة فيديو Android عن بُعد
+
+نسخة Android لا تشغّل Python أو `uv` داخل APK. بعد نشر Gateway على جهاز يملك مجلد `pipeline` واعتمادياته، يرسل التطبيق رابط YouTube إلى `POST /v1/processing/jobs` ثم يستطلع `GET /v1/processing/jobs/{id}` ويعرض ملفات MP4 من مسار الوسائط. يجب ضبط `PUBLIC_BASE_URL` على عنوان HTTPS العام للخادم، وضبط `ISM_PIPELINE_DIR` على مجلد `pipeline`. يحصر Gateway المعالجة في مهمة واحدة افتراضياً والتنزيل في مهمتين، ويعيد المهام التي كانت queued/running إلى failed بعد إعادة تشغيل الخادم بدلاً من ترك التطبيق ينتظر بلا نهاية.
+
+```bash
+# من جذر المستودع، بعد تثبيت uv أو اعتماديات pipeline
+cd gateway
+cp .env.example .env
+export PUBLIC_BASE_URL=https://your-gateway.example
+export GATEWAY_TOKEN='ضع-رمزًا-طويلًا'
+export ISM_PIPELINE_DIR="$PWD/../pipeline"
+uvicorn main:app --host 0.0.0.0 --port 8787
+```
+
+في تطبيق Android، افتح **Social Hub** أو قسم **ANDROID PROCESSING GATEWAY** داخل Studio، أدخل عنوان HTTPS نفسه والرمز، ثم اضغط **SAVE GATEWAY**. استخدم رابط YouTube أو HTTPS فقط؛ اختيار ملف محلي من الهاتف لا يمكن للخادم الوصول إليه مباشرة.
 
 للاختبار، أضف حسابًا تجريبيًا من لوحة التحكم ثم جدولة منشور بعد دقيقتين. العامل الخلفي يفحص المنشورات كل 30 ثانية ويحوّلها إلى `published` في Mock Mode. يمكنك مراقبة `/health` و`/v1/dashboard/summary` و`/v1/social/schedule`.
 
@@ -37,3 +65,28 @@ GATEWAY_TOKEN='ضع-رمزًا-محليًا-طويلًا' PROVIDER_MODE=mock uvi
 يتم إنشاء مفتاح idempotency ثابت لكل منشور لمنع تكرار نفس المحتوى والموعد. توجد أيضًا مسارات `POST /v1/accounts/{account_id}/resume` لاستئناف الحساب بعد معالجة التحذير، و`GET /v1/accounts` لإظهار حالة الحساب وعدد منشورات اليوم وآخر نشر وفترة التهدئة.
 
 هذه الآليات مخصصة للاستقرار والالتزام بالحدود الرسمية، وليست لتجاوز الحظر أو إخفاء الأتمتة. لا يستخدم Gateway تدوير عناوين IP أو Proxies للتحايل على المنصات.
+
+## Android Processing Engine diagnostics
+
+نسخة Android لا تحتاج إلى Gemini key داخل الهاتف عند استخدام المعالجة البعيدة. على جهاز Gateway أنشئ الملف المحلي غير المتعقب:
+
+```bash
+mkdir -p gateway/secrets
+umask 077
+printf '%s' "$GEMINI_API_KEY" > gateway/secrets/gemini.key
+export GATEWAY_TOKEN="ضع-رمزاً-عشوائياً-طويلاً"
+export ISM_GEMINI_KEY_FILE="$PWD/gateway/secrets/gemini.key"
+```
+
+بعد تشغيل Gateway، اختبر:
+
+```bash
+curl http://127.0.0.1:8787/health
+curl -H "Authorization: Bearer $GATEWAY_TOKEN" http://127.0.0.1:8787/v1/processing/capabilities
+curl -H "Authorization: Bearer $GATEWAY_TOKEN" -X POST http://127.0.0.1:8787/v1/diagnostics/pipeline
+curl -H "Authorization: Bearer $GATEWAY_TOKEN" -X POST http://127.0.0.1:8787/v1/diagnostics/gemini
+```
+
+يجب أن تكون `pipeline`, `python`, `ffmpeg`, و`storage` جاهزة قبل الضغط على CUT IT. إذا كان llm هو Gemini فيجب أن يعيد diagnostic قيمة `reachable: true`. لا يعيد أي مسار diagnostic المفتاح أو قيمة Bearer token.
+
+إذا لم يملك الخادم اعتماديات Pipeline بعد، لا تضغط CUT IT انتظاراً لنتيجة وهمية. ثبّت بيئة `pipeline` كما يشرح `pipeline/pyproject.toml`، وثبّت FFmpeg وffprobe، ثم أعد اختبار TEST SYSTEM. Android يقبل عنوان LAN في Debug مثل `http://192.168.1.10:8787`، بينما الاتصالات العامة يجب أن تستخدم HTTPS.
