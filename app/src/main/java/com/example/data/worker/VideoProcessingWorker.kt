@@ -1,6 +1,7 @@
 package com.example.data.worker
 
 import android.content.Context
+import android.net.Uri
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -8,10 +9,13 @@ import com.example.data.db.OpusDatabase
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.Project
 import com.example.data.repository.OpusRepository
+import com.example.data.video.MediaUriStabilizer
 import com.example.domain.model.PipelineJob
 import com.example.domain.model.PipelineStageStatus
 import com.example.domain.pipeline.ProductionVideoPipeline
 import kotlinx.coroutines.CancellationException
+import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.Locale
 import kotlin.math.roundToInt
 import java.util.UUID
@@ -50,9 +54,13 @@ class VideoProcessingWorker(
         if (jobId.isBlank() || sourceUri.isBlank() || title.isBlank() || durationMinutes <= 0) {
             return Result.failure(workDataOf(KEY_ERROR to "بيانات مهمة المعالجة غير مكتملة."))
         }
-        if (jobs.get(jobId)?.status == ProcessingJobEntity.STATUS_SUCCEEDED) {
-            val projectId = jobs.get(jobId)?.outputProjectId ?: 0L
-            return Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to projectId))
+        val parsedSource = runCatching { Uri.parse(sourceUri) }.getOrNull()
+        if (parsedSource?.scheme !in setOf("content", "file")) {
+            return Result.failure(workDataOf(KEY_JOB_ID to jobId, KEY_ERROR to "مصدر الفيديو غير صالح أو غير محلي."))
+        }
+        val existingJob = jobs.get(jobId)
+        if (existingJob?.status == ProcessingJobEntity.STATUS_SUCCEEDED) {
+            return Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to existingJob.outputProjectId))
         }
 
         val attempt = runAttemptCount + 1
@@ -90,6 +98,7 @@ class VideoProcessingWorker(
             )
             if (result.isSuccess) {
                 val projectId = result.getOrNull()?.firstOrNull()?.projectId ?: 0L
+                require(projectId > 0L) { "اكتملت المعالجة دون مشروع محفوظ صالح." }
                 jobs.updateState(
                     jobId = jobId,
                     status = ProcessingJobEntity.STATUS_SUCCEEDED,
@@ -105,6 +114,7 @@ class VideoProcessingWorker(
                     success = true
                 )
                 setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 100, KEY_STAGE to "COMPLETED", KEY_PROJECT_ID to projectId))
+                MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
                 Result.success(workDataOf(KEY_JOB_ID to jobId, KEY_PROJECT_ID to projectId))
             } else {
                 throw result.exceptionOrNull() ?: IllegalStateException("فشل خط المعالجة الموحد")
@@ -124,6 +134,7 @@ class VideoProcessingWorker(
                 "ألغى المستخدم مهمة معالجة الفيديو.",
                 success = false
             )
+            MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
             throw cancelled
         } catch (error: Exception) {
             val message = error.localizedMessage?.takeIf { it.isNotBlank() } ?: "فشلت معالجة الفيديو."
@@ -151,6 +162,7 @@ class VideoProcessingWorker(
                     message,
                     success = false
                 )
+                MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
                 Result.failure(workDataOf(KEY_JOB_ID to jobId, KEY_ERROR to message))
             }
         }
@@ -165,7 +177,8 @@ class VideoProcessingWorker(
             PipelineStageStatus.CANCELLED -> ProcessingJobEntity.STATUS_CANCELLED
             else -> ProcessingJobEntity.STATUS_RUNNING
         }
-        val progress = (pipelineJob.overallProgress * 100f).roundToInt().coerceIn(0, 100)
+        val safeOverallProgress = pipelineJob.overallProgress.takeIf { it.isFinite() } ?: 0f
+        val progress = (safeOverallProgress.coerceIn(0f, 1f) * 100f).roundToInt()
         val message = stageProgress?.message.orEmpty().ifBlank { stage.titleEn }
         jobs.updateState(
             jobId = jobId,
@@ -187,8 +200,14 @@ class VideoProcessingWorker(
     }
 
     private fun isRetryable(error: Exception): Boolean {
+        if (error is SocketTimeoutException || error is IOException) return true
         val message = error.message.orEmpty().lowercase(Locale.ROOT)
-        return message.contains("timeout") || message.contains("network") || message.contains("http 5") || message.contains("temporarily")
+        return message.contains("timeout") ||
+            message.contains("network") ||
+            message.contains("http 5") ||
+            message.contains("http 429") ||
+            message.contains("temporarily") ||
+            message.contains("اتصال")
     }
 
     companion object {

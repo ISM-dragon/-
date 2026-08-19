@@ -111,6 +111,9 @@ fun ClipStudioScreen(
     }
 
     var selectedClipIndex by remember { mutableIntStateOf(0) }
+    LaunchedEffect(initialProjectId, displayedClips.size) {
+        if (selectedClipIndex !in displayedClips.indices) selectedClipIndex = 0
+    }
     val activeClip = displayedClips.getOrNull(selectedClipIndex) ?: displayedClips.firstOrNull()
 
     var selectedCaptionTheme by remember { mutableStateOf("Opus Neon") }
@@ -342,7 +345,10 @@ fun ClipStudioScreen(
                                 lastAiCommandFeedback = feedback
                                 Toast.makeText(context, "تم تطبيق أمر التحرير بنجاح", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
-                                lastAiCommandFeedback = "تم تطبيق التحرير: $cmd"
+                                val message = e.localizedMessage?.takeIf { it.isNotBlank() }
+                                    ?: "تعذر تنفيذ أمر التحرير."
+                                lastAiCommandFeedback = "فشل التحرير: $message"
+                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                             } finally {
                                 isExecutingAiCommand = false
                             }

@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlin.math.ceil
 
 /**
@@ -63,6 +64,7 @@ class ProductionVideoPipeline(
         )
         _activeJob.value = job
         try {
+            require(project.sourceUrl.isNotBlank()) { "مصدر الفيديو فارغ." }
             val uri = Uri.parse(project.sourceUrl)
             require(uri.scheme == "content" || uri.scheme == "file") {
                 "المعالجة المحلية تحتاج Uri content:// أو file://؛ لم يتم تنزيل صفحات YouTube تلقائيًا."
@@ -132,29 +134,37 @@ class ProductionVideoPipeline(
             }
 
             job = stage(job, PipelineStageType.HOOK_GENERATION, PipelineStageStatus.PROCESSING, 0f, "إرسال المرشحين الصالحين إلى مزود AI")
-            val newProjectId = repository.processNewVideo(
-                title = project.title,
-                sourceUrl = project.sourceUrl,
-                transcriptOrPrompt = analysisText,
-                durationMinutes = ceil(media.metadata.durationSec / 60f).toInt().coerceAtLeast(1),
-                targetPlatform = targetPlatform,
-                captionTheme = captionStyle
-            )
+            val newProjectId = withTimeout(PROCESSING_TIMEOUT_MS) {
+                repository.processNewVideo(
+                    title = project.title,
+                    sourceUrl = project.sourceUrl,
+                    transcriptOrPrompt = analysisText,
+                    durationMinutes = ceil(media.metadata.durationSec / 60f).toInt().coerceAtLeast(1),
+                    targetPlatform = targetPlatform,
+                    captionTheme = captionStyle
+                )
+            }
             job = job.copy(projectId = newProjectId)
             onStageChanged(job)
             job = stage(job, PipelineStageType.HOOK_GENERATION, PipelineStageStatus.COMPLETED, 1f, "تم قبول نتيجة AI بعد validation")
             job = stage(job, PipelineStageType.CAPTION_SYNTHESIS, PipelineStageStatus.COMPLETED, 1f, "تم حفظ التوقيتات التي أعادها المزود فقط")
-            val reframing = reframingProvider.detectTrajectory(uri).getOrElse { throw it }
+            val reframing = reframingProvider.detectTrajectory(uri).getOrNull()
             job = stage(
                 job,
                 PipelineStageType.SMART_REFRAMING,
                 PipelineStageStatus.COMPLETED,
                 1f,
-                if (reframing.supported) "تم تطبيق trajectory إعادة التأطير" else reframing.reason
+                if (reframing?.supported == true) {
+                    "تم تطبيق trajectory إعادة التأطير"
+                } else {
+                    reframing?.reason ?: "تعذر تتبع المتحدث؛ تم الاحتفاظ بالتأطير الآمن"
+                }
             )
             job = stage(job, PipelineStageType.RENDERING_EXPORT, PipelineStageStatus.COMPLETED, 1f, "تم التحقق من ملفات التصدير الفعلية")
 
-            val clips = repository.getClipsForProject(newProjectId).first()
+            val clips = withTimeout(CLIP_LOOKUP_TIMEOUT_MS) {
+                repository.getClipsForProject(newProjectId).first()
+            }
             require(clips.isNotEmpty()) { "اكتمل التحليل دون ملفات مقاطع محفوظة." }
             val completedJob = job.copy(
                 overallStatus = PipelineStageStatus.COMPLETED,
@@ -208,11 +218,20 @@ class ProductionVideoPipeline(
     }
 
     private suspend fun stage(job: PipelineJob, type: PipelineStageType, status: PipelineStageStatus, progress: Float, message: String): PipelineJob {
-        val updatedStages = job.stages + (type to PipelineStageProgress(type, status, progress.coerceIn(0f, 1f), message))
+        val phaseProgress = progress.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+        val updatedStages = job.stages + (type to PipelineStageProgress(type, status, phaseProgress, message))
+        val weightedProgress = updatedStages.values.fold(0f) { total, stageProgress ->
+            val contribution = when (stageProgress.status) {
+                PipelineStageStatus.COMPLETED -> stageProgress.stage.weight
+                PipelineStageStatus.PROCESSING -> stageProgress.stage.weight * stageProgress.progress
+                else -> 0f
+            }
+            total + contribution
+        }.coerceIn(0f, 1f)
         val updated = job.copy(
             currentStage = type,
             stages = updatedStages,
-            overallProgress = updatedStages.values.count { it.status == PipelineStageStatus.COMPLETED }.toFloat() / PipelineStageType.values().size
+            overallProgress = weightedProgress
         )
         repository.savePipelineCheckpoint(
             jobId = updated.jobId,
@@ -225,5 +244,10 @@ class ProductionVideoPipeline(
         _activeJob.value = updated
         onStageChanged(updated)
         return updated
+    }
+
+    private companion object {
+        const val PROCESSING_TIMEOUT_MS = 20 * 60 * 1_000L
+        const val CLIP_LOOKUP_TIMEOUT_MS = 10_000L
     }
 }

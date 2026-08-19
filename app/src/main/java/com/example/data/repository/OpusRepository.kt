@@ -74,7 +74,7 @@ sealed class ProcessingStep(val stepNumber: Int, val title: String, val descript
     object Idle : ProcessingStep(0, "Ready", "Waiting for video input...")
     object Transcribing : ProcessingStep(1, "AI Speech Transcription", "Analyzing audio waveforms & separating multi-speaker tracks...")
     object ScanningHooks : ProcessingStep(2, "Virality Curve Scanning", "Evaluating retention probability, hook tension & emotional peaks...")
-    object CalculatingScores : ProcessingStep(3, "Virality Score™ Calculation", "Benchmarking against 10M+ top performing social shorts...")
+    object CalculatingScores : ProcessingStep(3, "Virality Score™ Calculation", "Validating explainable factors from transcript, timing and media signals...")
     object StylingCaptions : ProcessingStep(4, "Dynamic Caption & B-Roll", "Synthesizing karaoke highlights, auto emojis & 9:16 reframe...")
     object Completed : ProcessingStep(5, "Clips Generated", "Your viral shorts are ready in ISM Studio!")
 }
@@ -283,20 +283,6 @@ class OpusRepository(context: Context) {
         }
     }
 
-    suspend fun refillProviderCredits(providerId: String, amount: Double = 10.0) = withContext(Dispatchers.IO) {
-        val updated = _aiProviders.value.map { provider ->
-            if (provider.id == providerId) {
-                provider.copy(
-                    totalCreditsAllocated = provider.totalCreditsAllocated + amount,
-                    usedCredits = 0.0,
-                    isExhausted = false,
-                    balanceStatus = "Refilled & Active"
-                )
-            } else provider
-        }
-        saveAiProviders(updated)
-    }
-
     suspend fun updateProviderKey(providerId: String, newKey: String, model: String? = null) = withContext(Dispatchers.IO) {
         val updated = _aiProviders.value.map { provider ->
             if (provider.id == providerId) {
@@ -500,7 +486,7 @@ class OpusRepository(context: Context) {
                         errorMessage = result.errorMessage
                     )
                 )
-                "لم يُنفّذ أمر التحرير: ${result.errorMessage}"
+                throw IllegalStateException("لم يُنفّذ أمر التحرير: ${result.errorMessage}")
             }
         }
     }
@@ -1015,12 +1001,11 @@ class OpusRepository(context: Context) {
             estimatedTimeSavedMinutes = 0,
             status = if (exportFailures == 0) "SUCCESS" else "PARTIAL_FAILURE",
             targetPlatform = targetPlatform,
-            details = "Extracted ${clipsData.size} viral shorts with top virality score of ${maxScore}%. " +
-                if (exportFailures == 0) {
-                    "Saved ~${actualDurationMinutes * 4} minutes of editing time."
-                } else {
-                    "$exportFailures clip export(s) failed; review the project before publishing."
-                },
+            details = if (exportFailures == 0) {
+                "Extracted ${clipsData.size} validated clips; highest returned score was ${maxScore}%."
+            } else {
+                "Extracted ${clipsData.size} clips, but $exportFailures MP4 export(s) failed; review the project before publishing."
+            },
             timestamp = System.currentTimeMillis()
         )
         repurposingHistoryDao.insertHistory(historyEntry)

@@ -29,7 +29,7 @@ import androidx.media3.transformer.Transformer
 import java.io.File
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * Real on-device video export for ISM.
@@ -106,8 +106,12 @@ class Media3VideoProcessor(private val context: Context) {
         require(startTimeSec >= 0) { "Clip start time cannot be negative." }
         require(endTimeSec > startTimeSec) { "Clip end time must be after its start time." }
 
-        outputFile.parentFile?.mkdirs()
-        if (outputFile.exists()) outputFile.delete()
+        require(outputFile.parentFile?.exists() == true || outputFile.parentFile?.mkdirs() == true) {
+            "تعذر إنشاء مجلد التصدير."
+        }
+        if (outputFile.exists()) {
+            require(outputFile.delete()) { "تعذر حذف ملف التصدير القديم." }
+        }
 
         val clipping = MediaItem.ClippingConfiguration.Builder()
             .setStartPositionMs(startTimeSec * 1_000L)
@@ -122,10 +126,14 @@ class Media3VideoProcessor(private val context: Context) {
         val videoEffects = mutableListOf<androidx.media3.common.Effect>()
         if (cropCenterX != null) {
             val source = inspectSource(inputUri)
-            val sourceAspect = source?.width?.toFloat()?.div(source.height.toFloat()) ?: (16f / 9f)
-            val cropFraction = (aspectRatio.value / sourceAspect).coerceAtMost(1f)
+            val sourceAspect = source
+                ?.takeIf { it.width > 0 && it.height > 0 }
+                ?.let { it.width.toFloat() / it.height.toFloat() }
+                ?.takeIf { it.isFinite() && it > 0f }
+                ?: (16f / 9f)
+            val cropFraction = (aspectRatio.value / sourceAspect).coerceIn(0.01f, 1f)
             if (cropFraction < 0.999f) {
-                val halfWidth = cropFraction
+                val halfWidth = cropFraction.coerceIn(0.01f, 1f)
                 val boundedCenter = cropCenterX.coerceIn(-1f, 1f)
                 val left = (boundedCenter - halfWidth).coerceIn(-1f, 1f - (2f * halfWidth))
                 val right = left + (2f * halfWidth)
@@ -151,7 +159,7 @@ class Media3VideoProcessor(private val context: Context) {
             .setEffects(effects)
             .build()
 
-        return suspendCoroutine { continuation ->
+        return suspendCancellableCoroutine { continuation ->
             val handler = Handler(Looper.getMainLooper())
             val progressHolder = ProgressHolder()
             var progressRunnable: Runnable? = null
@@ -165,13 +173,15 @@ class Media3VideoProcessor(private val context: Context) {
                         exportResult: ExportResult
                     ) {
                         progressRunnable?.let(handler::removeCallbacks)
-                        if (outputFile.exists() && outputFile.length() > 0L) {
-                            onProgress(100)
-                            continuation.resume(outputFile)
-                        } else {
-                            continuation.resumeWithException(
-                                IllegalStateException("Media3 completed without creating an output file.")
-                            )
+                        if (!continuation.isCompleted) {
+                            if (outputFile.exists() && outputFile.length() > 0L) {
+                                onProgress(100)
+                                continuation.resume(outputFile)
+                            } else {
+                                continuation.resumeWithException(
+                                    IllegalStateException("Media3 completed without creating an output file.")
+                                )
+                            }
                         }
                     }
 
@@ -181,7 +191,7 @@ class Media3VideoProcessor(private val context: Context) {
                         exportException: ExportException
                     ) {
                         progressRunnable?.let(handler::removeCallbacks)
-                        continuation.resumeWithException(exportException)
+                        if (!continuation.isCompleted) continuation.resumeWithException(exportException)
                     }
                 })
                 .build()
@@ -195,6 +205,10 @@ class Media3VideoProcessor(private val context: Context) {
                 }
             }
             handler.post(progressRunnable!!)
+            continuation.invokeOnCancellation {
+                progressRunnable?.let(handler::removeCallbacks)
+                runCatching { transformer.cancel() }
+            }
             transformer.start(editedMediaItem, outputFile.absolutePath)
         }
     }

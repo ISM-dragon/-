@@ -81,6 +81,8 @@ import kotlinx.coroutines.delay
 fun VideoProcessingLoadingDialog(
     processingStep: ProcessingStep,
     videoTitle: String = "الفيديو الجاري معالجته",
+    actualProgressPercent: Int? = null,
+    actualStage: String? = null,
     onDismissRequest: () -> Unit = {}
 ) {
     var elapsedSeconds by remember { mutableIntStateOf(0) }
@@ -112,14 +114,17 @@ fun VideoProcessingLoadingDialog(
         label = "ring_rotation"
     )
 
-    val stepProgress = when (processingStep) {
-        is ProcessingStep.Idle -> 0.1f
+    val stepProgress = actualProgressPercent?.coerceIn(0, 100)?.div(100f) ?: when (processingStep) {
+        is ProcessingStep.Idle -> 0f
         is ProcessingStep.Transcribing -> 0.28f
         is ProcessingStep.ScanningHooks -> 0.55f
         is ProcessingStep.CalculatingScores -> 0.78f
         is ProcessingStep.StylingCaptions -> 0.92f
         is ProcessingStep.Completed -> 1.0f
     }
+    val stageLabel = actualStage?.takeIf { it.isNotBlank() }?.let(::localizedStageName)
+        ?: processingStep.title
+    val timelineStep = actualStage?.let(::timelineStepForStage) ?: processingStep.stepNumber
 
     val animatedProgress by animateFloatAsState(
         targetValue = stepProgress,
@@ -241,10 +246,10 @@ fun VideoProcessingLoadingDialog(
                                 color = OpusTextPrimary
                             )
                             Text(
-                                text = when (processingStep) {
+                                text = actualStage?.takeIf { it.isNotBlank() }?.let(::localizedStageName) ?: when (processingStep) {
                                     is ProcessingStep.Transcribing -> "تفريغ الصوت"
                                     is ProcessingStep.ScanningHooks -> "كشف الخطاف"
-                                    is ProcessingStep.CalculatingScores -> "حساب الفيروسية"
+                                    is ProcessingStep.CalculatingScores -> "حساب الانتشار"
                                     is ProcessingStep.StylingCaptions -> "توليد الترجمة"
                                     is ProcessingStep.Completed -> "مكتمل!"
                                     else -> "تحليل AI"
@@ -260,7 +265,7 @@ fun VideoProcessingLoadingDialog(
 
                     // Current Stage Title and Description
                     Text(
-                        text = processingStep.title,
+                        text = stageLabel,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Black,
                             color = OpusTextPrimary
@@ -295,25 +300,25 @@ fun VideoProcessingLoadingDialog(
                                 stepIndex = 1,
                                 title = "تفريغ وتحليل الصوت (AI Speech)",
                                 icon = Icons.Default.GraphicEq,
-                                currentStepNum = processingStep.stepNumber
+                                currentStepNum = timelineStep
                             )
                             ProcessingStageRow(
                                 stepIndex = 2,
                                 title = "فحص منحنى الاحتفاظ والخطاف (Hooks)",
                                 icon = Icons.Default.TrendingUp,
-                                currentStepNum = processingStep.stepNumber
+                                currentStepNum = timelineStep
                             )
                             ProcessingStageRow(
                                 stepIndex = 3,
                                 title = "احتساب درجات الفيروسية ومطابقة النماذج",
                                 icon = Icons.Default.Psychology,
-                                currentStepNum = processingStep.stepNumber
+                                currentStepNum = timelineStep
                             )
                             ProcessingStageRow(
                                 stepIndex = 4,
                                 title = "توليد الترجمة الحركية وأبعاد 9:16",
                                 icon = Icons.Default.Subtitles,
-                                currentStepNum = processingStep.stepNumber
+                                currentStepNum = timelineStep
                             )
                         }
                     }
@@ -352,6 +357,34 @@ fun VideoProcessingLoadingDialog(
             }
         }
     }
+}
+
+private fun timelineStepForStage(stage: String): Int = when (stage.uppercase()) {
+    "VALIDATING", "IMPORT", "AUDIO_EXTRACTION", "TRANSCRIPTION" -> 1
+    "SILENCE_REMOVAL", "SEMANTIC_ANALYSIS", "CLIP_DETECTION" -> 2
+    "VIRALITY_SCORING", "HOOK_GENERATION" -> 3
+    "CAPTION_SYNTHESIS", "SMART_REFRAMING", "RENDERING_EXPORT" -> 4
+    "COMPLETED" -> 5
+    else -> 1
+}
+
+private fun localizedStageName(stage: String): String = when (stage.uppercase()) {
+    "VALIDATING" -> "التحقق من ملف الفيديو"
+    "IMPORT" -> "استيراد الفيديو"
+    "AUDIO_EXTRACTION" -> "تحليل المسار الصوتي"
+    "TRANSCRIPTION" -> "تفريغ الكلام"
+    "SILENCE_REMOVAL" -> "تحليل الصمت"
+    "SEMANTIC_ANALYSIS" -> "التحليل الدلالي"
+    "CLIP_DETECTION" -> "اختيار المقاطع"
+    "VIRALITY_SCORING" -> "تقييم المقاطع"
+    "HOOK_GENERATION" -> "تحليل Gemini"
+    "CAPTION_SYNTHESIS" -> "إنشاء الكابتشن"
+    "SMART_REFRAMING" -> "إعادة التأطير"
+    "RENDERING_EXPORT" -> "تصدير MP4"
+    "RETRY_WAIT" -> "انتظار إعادة المحاولة"
+    "COMPLETED" -> "اكتملت المعالجة"
+    "FAILED" -> "فشلت المعالجة"
+    else -> stage.replace('_', ' ').lowercase()
 }
 
 @Composable

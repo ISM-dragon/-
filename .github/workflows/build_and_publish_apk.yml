@@ -2,17 +2,16 @@ name: Build and Publish Android APK
 
 on:
   push:
-    branches: [ "**" ]
-    tags: [ "v*" ]
+    tags:
+      - "android-v*"
   workflow_dispatch:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   build-and-release:
-    name: Build & Publish APK
+    name: Test, Build & Publish APK
     runs-on: ubuntu-latest
 
     steps:
@@ -20,43 +19,54 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: temurin
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
 
-      - name: Generate Debug Keystore
+      - name: Generate CI Debug Keystore
         run: |
-          keytool -genkey -v -keystore debug.keystore \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -alias androiddebugkey \
+          keytool -genkeypair -v \
+            -keystore debug.keystore \
             -storepass android \
             -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
 
-      - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
+      - name: Run Unit Tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
-      - name: Create Git Tag & Release
-        uses: softprops/action-gh-release@v2
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        with:
-          tag_name: v1.1.2-apk
-          name: "Opus Pro AI - APK v1.1.2"
-          body: "Opus Pro AI APK version 1.1.2 — fixes real project navigation and removes the static studio preview. Generated from commit ${{ github.sha }}."
-          draft: false
-          prerelease: false
-          files: |
-            app/build/outputs/apk/debug/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run Android Lint
+        run: ./gradlew :app:lint --no-daemon --stacktrace
+
+      - name: Build Debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OpusPro-APK-v1.1.2
-          path: app/build/outputs/apk/debug/*.apk
+          name: ISM-Android-${{ github.ref_name }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
           retention-days: 30
+
+      - name: Publish Tagged Release
+        if: startsWith(github.ref, 'refs/tags/android-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "ISM Android ${{ github.ref_name }}"
+          body: "Tested Android APK generated from commit ${{ github.sha }}. Unit tests and Android Lint passed before publication."
+          draft: false
+          prerelease: false
+          files: app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

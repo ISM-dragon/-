@@ -26,6 +26,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import okio.BufferedSink
+import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
@@ -209,8 +210,7 @@ class GeminiClipService(private val context: Context? = null) {
                 AiProviderType.GEMINI.name -> {
                     val videoRef = videoUri?.let { uploadVideoForAnalysis(it, apiKey) }
                     if (videoUri != null && videoRef == null) {
-                        Log.w("GeminiClipService", "Video could not be uploaded to Gemini File API")
-                        return@withContext null
+                        throw IOException("تعذر رفع الفيديو إلى Gemini File API أو لم يصبح الملف ACTIVE خلال المهلة.")
                     }
                     val parts = JSONArray()
                     videoRef?.let { (fileUri, mimeType) ->
@@ -250,8 +250,9 @@ class GeminiClipService(private val context: Context? = null) {
                             return@withContext partsResponse?.getJSONObject(0)?.optString("text")
                         }
                     } else {
-                        Log.w("GeminiClipService", "Gemini provider ${provider.name} failed with code ${response.code}: $responseBody")
+                        throw IOException("Gemini HTTP ${response.code}: ${extractProviderError(responseBody)}")
                     }
+                    throw IOException("لم يُرجع Gemini محتوى صالحاً للتحليل.")
                 }
                 AiProviderType.ANTHROPIC.name -> {
                     val modelToUse = provider.modelName.ifBlank { "claude-3-5-sonnet-20241022" }
@@ -286,8 +287,9 @@ class GeminiClipService(private val context: Context? = null) {
                             return@withContext contentArr.getJSONObject(0).optString("text")
                         }
                     } else {
-                        Log.w("GeminiClipService", "Anthropic provider ${provider.name} failed with code ${response.code}: $responseBody")
+                        throw IOException("Anthropic HTTP ${response.code}: ${extractProviderError(responseBody)}")
                     }
+                    throw IOException("لم يُرجع Anthropic محتوى صالحاً.")
                 }
                 else -> {
                     // OpenRouter, Groq, Mistral, OpenAI, Custom
@@ -346,14 +348,25 @@ class GeminiClipService(private val context: Context? = null) {
                             return@withContext msg?.optString("content")
                         }
                     } else {
-                        Log.w("GeminiClipService", "OpenAI-compatible provider ${provider.name} failed with code ${response.code}: $responseBody")
+                        throw IOException("${provider.name} HTTP ${response.code}: ${extractProviderError(responseBody)}")
                     }
+                    throw IOException("لم يُرجع ${provider.name} محتوى صالحاً.")
                 }
             }
         } catch (e: Exception) {
-            Log.e("GeminiClipService", "Error executing request with provider ${provider.name}: ${e.message}")
+            Log.e("GeminiClipService", "Error executing request with provider ${provider.name}: ${e.message}", e)
+            throw e
         }
-        null
+    }
+
+    private fun extractProviderError(responseBody: String?): String {
+        if (responseBody.isNullOrBlank()) return "استجابة فارغة"
+        return runCatching {
+            val json = JSONObject(responseBody)
+            json.optJSONObject("error")?.optString("message")
+                ?.takeIf { it.isNotBlank() }
+                ?: responseBody.take(300)
+        }.getOrDefault(responseBody.take(300))
     }
 
 
@@ -476,6 +489,7 @@ class GeminiClipService(private val context: Context? = null) {
         """.trimIndent()
 
         // 1. If providers pool provided, try them in priority order
+        var lastProviderError: Throwable? = null
         val activeProviders = providers.filter { it.isEnabled && it.apiKey.isNotBlank() }.sortedBy { it.priority }
         if (activeProviders.isNotEmpty()) {
             for (provider in activeProviders) {
@@ -492,8 +506,10 @@ class GeminiClipService(private val context: Context? = null) {
                             Log.d("GeminiClipService", "Successfully generated clips using provider: ${provider.name}")
                             return@withContext parsedClips
                         }
+                        lastProviderError = IllegalStateException("استجابة ${provider.name} لا تحتوي على مصفوفة مقاطع JSON صالحة.")
                     }
                 } catch (e: Exception) {
+                    lastProviderError = e
                     Log.w("GeminiClipService", "Provider ${provider.name} failed during clip generation, failing over...", e)
                 }
             }
@@ -505,8 +521,11 @@ class GeminiClipService(private val context: Context? = null) {
         } catch (e: Exception) {
             ""
         }
+        val primaryKeyAlreadyTried = activeProviders.any {
+            it.providerType == AiProviderType.GEMINI.name && it.apiKey.trim() == apiKey
+        }
 
-        if (!apiKey.isNullOrBlank() && apiKey != "MY_GEMINI_API_KEY") {
+        if (!apiKey.isNullOrBlank() && apiKey != "MY_GEMINI_API_KEY" && !primaryKeyAlreadyTried) {
             try {
                 val primaryConfig = AiProviderConfig(
                     name = "Primary Google Gemini",
@@ -524,13 +543,17 @@ class GeminiClipService(private val context: Context? = null) {
                     if (parsedClips.isNotEmpty()) {
                         return@withContext parsedClips
                     }
+                    lastProviderError = IllegalStateException("استجابة Gemini لا تحتوي على مصفوفة مقاطع JSON صالحة.")
                 }
             } catch (e: Exception) {
-                Log.e("GeminiClipService", "Primary Gemini API call failed, falling back to local engine", e)
+                lastProviderError = e
+                Log.e("GeminiClipService", "Primary Gemini API call failed", e)
             }
         }
 
-        throw IllegalStateException("لم يُرجع أي مزود AI مقاطع صالحة؛ لا توجد نتيجة محلية بديلة وهمية.")
+        val detail = lastProviderError?.localizedMessage?.takeIf { it.isNotBlank() }
+            ?: "لم يُضف مفتاح مزود صالح أو كانت الاستجابة فارغة."
+        throw IllegalStateException("فشل تحليل الفيديو: $detail", lastProviderError)
     }
 
     private fun parseClipsFromJson(jsonText: String): List<ClipGenerationData> {

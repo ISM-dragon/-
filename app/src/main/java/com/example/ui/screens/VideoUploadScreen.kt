@@ -141,6 +141,7 @@ fun VideoUploadScreen(
     var videoHeight by remember { mutableIntStateOf(0) }
     var thumbnailBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isLoadingMetadata by remember { mutableStateOf(false) }
+    var metadataError by remember { mutableStateOf<String?>(null) }
 
     // Repurposing Configuration Options
     var selectedCaptionTheme by remember { mutableStateOf("Opus Neon") }
@@ -200,14 +201,21 @@ fun VideoUploadScreen(
     if (isProcessing || processingStep !is ProcessingStep.Idle) {
         VideoProcessingLoadingDialog(
             processingStep = processingStep,
-            videoTitle = fileName ?: "Local Video"
+            videoTitle = fileName ?: "Local Video",
+            actualProgressPercent = processingJob?.progress,
+            actualStage = processingJob?.currentStage
         )
     }
 
     // Validation flags
     val isOverSizeLimit = fileSizeBytes > MAX_FILE_SIZE_BYTES
     val isValidDuration = durationMs in 5_000..7_200_000 // 5s to 2 hours
-    val isReadyForProcessing = selectedVideoUri != null && !isOverSizeLimit && fileSizeBytes > 0 && !isLoadingMetadata
+    val isReadyForProcessing = selectedVideoUri != null &&
+        !isOverSizeLimit &&
+        fileSizeBytes > 0 &&
+        isValidDuration &&
+        metadataError == null &&
+        !isLoadingMetadata
 
     // Media Picker Launcher (using modern PickVisualMedia)
     val mediaPickerLauncher = rememberLauncherForActivityResult(
@@ -230,6 +238,8 @@ fun VideoUploadScreen(
                     videoWidth = width
                     videoHeight = height
                     thumbnailBitmap = bitmap
+                    metadataError = validateVideoMetadata(size, duration, width, height)
+                    metadataError?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                     isLoadingMetadata = false
                 }
             }
@@ -259,6 +269,8 @@ fun VideoUploadScreen(
                     videoWidth = width
                     videoHeight = height
                     thumbnailBitmap = bitmap
+                    metadataError = validateVideoMetadata(size, duration, width, height)
+                    metadataError?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                     isLoadingMetadata = false
                 }
             }
@@ -286,6 +298,8 @@ fun VideoUploadScreen(
                     videoWidth = width
                     videoHeight = height
                     thumbnailBitmap = bitmap
+                    metadataError = validateVideoMetadata(size, duration, width, height)
+                    metadataError?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                     isLoadingMetadata = false
                 }
             }
@@ -340,7 +354,8 @@ fun VideoUploadScreen(
         if (processingStep !is ProcessingStep.Idle) {
             item {
                 ActiveUploadProcessingCard(
-                    processingStep = processingStep
+                    processingStep = processingStep,
+                    processingJob = processingJob
                 )
             }
         }
@@ -1047,7 +1062,8 @@ fun VideoUploadScreen(
 
 @Composable
 private fun ActiveUploadProcessingCard(
-    processingStep: ProcessingStep
+    processingStep: ProcessingStep,
+    processingJob: ProcessingJobEntity?
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "upload_pulse")
     val glowAlpha by infiniteTransition.animateFloat(
@@ -1111,7 +1127,7 @@ private fun ActiveUploadProcessingCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            val (progress, message) = when (processingStep) {
+            val fallback = when (processingStep) {
                 is ProcessingStep.Transcribing -> 0.25f to processingStep.description
                 is ProcessingStep.ScanningHooks -> 0.50f to processingStep.description
                 is ProcessingStep.CalculatingScores -> 0.75f to processingStep.description
@@ -1119,6 +1135,10 @@ private fun ActiveUploadProcessingCard(
                 is ProcessingStep.Completed -> 1.0f to processingStep.description
                 is ProcessingStep.Idle -> 0.0f to "Idle"
             }
+            val progress = processingJob?.progress?.coerceIn(0, 100)?.div(100f) ?: fallback.first
+            val message = processingJob?.currentStage?.takeIf { it.isNotBlank() }
+                ?.replace('_', ' ')
+                ?: fallback.second
 
             Text(
                 text = message,
@@ -1243,6 +1263,13 @@ private suspend fun extractVideoMetadata(
     withContext(Dispatchers.Main) {
         onResult(fileName, fileSize, duration, width, height, thumbnail)
     }
+}
+
+private fun validateVideoMetadata(size: Long, duration: Long, width: Int, height: Int): String? = when {
+    size <= 0L -> "تعذر قراءة حجم ملف الفيديو. اختر الملف مرة أخرى."
+    duration !in 5_000L..7_200_000L -> "مدة الفيديو غير صالحة؛ يجب أن تكون بين 5 ثوانٍ وساعتين."
+    width <= 0 || height <= 0 -> "تعذر قراءة أبعاد الفيديو أو أن الملف غير صالح."
+    else -> null
 }
 
 private fun formatFileSize(bytes: Long): String {

@@ -251,7 +251,7 @@ fun ApiManagementSettingsScreen(
                                 .padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = if (configuredCount > 0) "$configuredCount Active Keys" else "Demo Ready",
+                                text = if (configuredCount > 0) "$configuredCount Active Keys" else "لا توجد مفاتيح",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (configuredCount > 0) OpusViralEmerald else OpusGold
@@ -262,7 +262,7 @@ fun ApiManagementSettingsScreen(
                     Spacer(modifier = Modifier.height(14.dp))
 
                     Text(
-                        text = "Bring your own API keys for OpenAI, Anthropic Claude, Google Gemini and high-speed routers. Monitor live token usage, remaining credit balances, and ensure zero-downtime failover.",
+                        text = "أضف مفاتيحك الخاصة للمزودات المدعومة. تظهر بيانات الاستخدام والحصة فقط عندما يعيدها المزود فعلياً، ويمكن تجربة مزود بديل عند فشل الطلب.",
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
                         color = OpusTextSecondary
@@ -292,7 +292,7 @@ fun ApiManagementSettingsScreen(
                                         fontWeight = FontWeight.Black,
                                         color = OpusViralEmerald
                                     )
-                                    Text(" / 180 min", fontSize = 10.sp, color = OpusTextSecondary, modifier = Modifier.padding(bottom = 2.dp, start = 2.dp))
+                                    Text(" / ${googleFlowCredits.totalCreditsMinutes} min", fontSize = 10.sp, color = OpusTextSecondary, modifier = Modifier.padding(bottom = 2.dp, start = 2.dp))
                                 }
                             }
                         }
@@ -308,7 +308,7 @@ fun ApiManagementSettingsScreen(
                             Column {
                                 Text("Combined API Pool", fontSize = 10.sp, color = OpusTextSecondary)
                                 Text(
-                                    "$${String.format("%.2f", totalEstimatedAvailableUsd.coerceAtLeast(18.50))}",
+                                    if (totalEstimatedAvailableUsd > 0.0) "$${String.format(Locale.ROOT, "%.2f", totalEstimatedAvailableUsd)}" else "غير متاح",
                                     fontSize = 17.sp,
                                     fontWeight = FontWeight.Black,
                                     color = OpusElectricCyan
@@ -580,10 +580,10 @@ fun ApiManagementSettingsScreen(
                                         customBaseUrl = newCustomUrl.trim(),
                                         priority = aiProviders.size + 1,
                                         isEnabled = true,
-                                        totalCreditsAllocated = 10.0,
+                                        totalCreditsAllocated = 0.0,
                                         usedCredits = 0.0,
                                         creditUnit = newType.unitCurrency,
-                                        balanceStatus = "Configured & Active"
+                                        balanceStatus = "Configured"
                                     )
                                     repository.addOrUpdateAiProvider(config)
                                     Toast.makeText(context, "Added ${config.name} successfully!", Toast.LENGTH_SHORT).show()
@@ -665,12 +665,6 @@ fun ApiManagementSettingsScreen(
                         repository.toggleAiProvider(provider.id, enabled)
                     }
                 },
-                onRefillCredits = {
-                    coroutineScope.launch {
-                        repository.refillProviderCredits(provider.id, 10.0)
-                        Toast.makeText(context, "Simulated Credit Top-Up for ${provider.name}", Toast.LENGTH_SHORT).show()
-                    }
-                },
                 onDelete = if (provider.id != "gemini_primary") {
                     {
                         coroutineScope.launch {
@@ -740,7 +734,6 @@ private fun ProviderCreditManagementCard(
     onSave: () -> Unit,
     onTestConnection: () -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
-    onRefillCredits: () -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
@@ -752,6 +745,7 @@ private fun ProviderCreditManagementCard(
 
     val isConnected = provider.isEnabled && provider.apiKey.isNotBlank()
     val isDirty = draftKey != provider.apiKey || draftModel != provider.modelName
+    val hasCreditData = provider.totalCreditsAllocated > 0.0
 
     val animatedProgress by animateFloatAsState(
         targetValue = provider.creditPercentage,
@@ -879,7 +873,7 @@ private fun ProviderCreditManagementCard(
                     ) {
                         Column {
                             Text(
-                                text = "Real-Time Credit Balance",
+                                text = "Provider Credit Data",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = OpusTextSecondary
@@ -913,9 +907,11 @@ private fun ProviderCreditManagementCard(
                         }
 
                         // Status Chip
-                        val statusColor = if (provider.apiKey.isBlank()) OpusTextSecondary
-                        else if (provider.creditPercentage > 0.3f) OpusViralEmerald
-                        else OpusHotPink
+                        val statusColor = when {
+                            provider.apiKey.isBlank() || !hasCreditData -> OpusTextSecondary
+                            provider.creditPercentage > 0.3f -> OpusViralEmerald
+                            else -> OpusHotPink
+                        }
 
                         Box(
                             modifier = Modifier
@@ -925,9 +921,12 @@ private fun ProviderCreditManagementCard(
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                text = if (provider.apiKey.isBlank()) "No Key Added"
-                                else if (provider.creditPercentage > 0.3f) "Healthy Balance"
-                                else "Low Balance",
+                                text = when {
+                                    provider.apiKey.isBlank() -> "No Key Added"
+                                    !hasCreditData -> "Usage unavailable"
+                                    provider.creditPercentage > 0.3f -> "Healthy Balance"
+                                    else -> "Low Balance"
+                                },
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = statusColor
@@ -1117,13 +1116,10 @@ private fun ProviderCreditManagementCard(
                     Spacer(modifier = Modifier.width(1.dp))
                 }
 
-                // Simulated Top-Up link for tests
                 Text(
-                    text = "Refill Balance (Sim)",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = OpusGold,
-                    modifier = Modifier.clickable { onRefillCredits() }
+                    text = "لا تُعرض الحصة إلا عند توفر بيانات فعلية",
+                    fontSize = 9.sp,
+                    color = OpusTextSecondary
                 )
             }
 

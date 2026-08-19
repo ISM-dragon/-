@@ -551,7 +551,7 @@ private fun GoogleFlowCreditsSection(
                             color = OpusTextPrimary
                         )
                         Text(
-                            text = "التحويل فورياً إلى المزود البديل (Groq/OpenRouter) لمنع توقف المعالجة",
+                            text = "محاولة مزود بديل عند الفشل إذا كان مفتاحه صالحاً ومفعّلاً",
                             fontSize = 10.sp,
                             color = OpusTextSecondary
                         )
@@ -587,13 +587,13 @@ private fun GoogleFlowCreditsSection(
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
-                    contentDescription = "Refill",
+                    contentDescription = "Reset usage data",
                     tint = OpusGold,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "شحن الرصيد التجريبي",
+                    text = "مسح بيانات الحصة",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = OpusGold

@@ -24,7 +24,7 @@ object ComparisonRepository {
             winnerSummary = "ISM wins for rapid social repurposing & AI virality analysis. Descript wins for deep multitrack editing & studio sound restoration.",
             criteriaList = listOf(
                 ComparisonCriteriaItem("1-Click Viral Extraction", "Autonomous AI detects top hooks & moments", "Manual text highlighting required", "opus", "ISM analyzes retention curves automatically"),
-                ComparisonCriteriaItem("Virality Score™ (0-100)", "Yes, with 5 sub-metric scores & psychological breakdown", "No virality metrics", "opus", "ISM benchmarks clips against 10M+ viral shorts"),
+                ComparisonCriteriaItem("Virality Score™ (0-100)", "Yes, with explainable weighted factors", "No virality metrics", "opus", "ISM evaluates transcript, timing, audio signals, and validated AI output when available"),
                 ComparisonCriteriaItem("Auto Speaker Reframe (9:16)", "Active speaker detection & dynamic split-screen", "Manual multicam framing", "opus", "ISM follows faces without keyframing"),
                 ComparisonCriteriaItem("AI Dynamic Karaoke Captions", "Animated neon, Hormozi, MrBeast styles with auto emojis", "Basic customizable captions", "opus", "Opus highlights emotional trigger words with emojis"),
                 ComparisonCriteriaItem("AI B-Roll Prompts", "Contextual visual cues and overlay recommendations", "Stock library search", "opus", "Automated visual enhancement recommendations"),
