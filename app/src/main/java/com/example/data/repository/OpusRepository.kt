@@ -33,6 +33,9 @@ import com.example.data.model.DirectPlatformApiCredentials
 import com.example.data.model.GoogleFlowCreditInfo
 import com.example.data.model.GatewayConfig
 import com.example.data.model.GatewaySnapshot
+import com.example.data.model.GatewayProcessingCapabilities
+import com.example.data.model.GatewayProviderModel
+import com.example.data.model.GatewayUsageSummary
 import com.example.data.model.Project
 import com.example.data.model.PipelineCheckpointEntity
 import com.example.data.model.ProcessingJobEntity
@@ -374,6 +377,7 @@ class OpusRepository(context: Context) {
 
     private val gatewayPrefs = context.getSharedPreferences("ism_gateway_settings", Context.MODE_PRIVATE)
     private val gatewayClient = SocialGatewayClient()
+    private val processingGatewayClient = ProcessingGatewayClient(appContext.contentResolver)
     private val _gatewayConfig = MutableStateFlow(
         GatewayConfig(
             baseUrl = gatewayPrefs.getString("base_url", "") ?: "",
@@ -385,6 +389,12 @@ class OpusRepository(context: Context) {
     val gatewaySnapshot = _gatewaySnapshot.asStateFlow()
     private val _gatewayError = MutableStateFlow("")
     val gatewayError = _gatewayError.asStateFlow()
+    private val _gatewayProviders = MutableStateFlow<List<GatewayProviderModel>>(emptyList())
+    val gatewayProviders = _gatewayProviders.asStateFlow()
+    private val _gatewayUsageSummary = MutableStateFlow<GatewayUsageSummary?>(null)
+    val gatewayUsageSummary = _gatewayUsageSummary.asStateFlow()
+    private val _gatewayCapabilities = MutableStateFlow<GatewayProcessingCapabilities?>(null)
+    val gatewayCapabilities = _gatewayCapabilities.asStateFlow()
 
     suspend fun saveGatewayConfig(config: GatewayConfig) = withContext(Dispatchers.IO) {
         val editor = gatewayPrefs.edit().putString("base_url", config.baseUrl.trim())
@@ -392,6 +402,24 @@ class OpusRepository(context: Context) {
         editor.apply()
         _gatewayConfig.value = config.copy(baseUrl = config.baseUrl.trim(), token = config.token.trim())
         _gatewayError.value = ""
+    }
+
+    suspend fun refreshGatewayAiRegistry(): Result<List<GatewayProviderModel>> = withContext(Dispatchers.IO) {
+        val result = processingGatewayClient.listProviders(_gatewayConfig.value)
+        result.onSuccess { _gatewayProviders.value = it }.onFailure { _gatewayError.value = it.localizedMessage ?: "تعذر تحميل سجل مزودي Gateway" }
+        result
+    }
+
+    suspend fun refreshGatewayUsage(days: Int = 30): Result<GatewayUsageSummary> = withContext(Dispatchers.IO) {
+        val result = processingGatewayClient.usageSummary(_gatewayConfig.value, days)
+        result.onSuccess { _gatewayUsageSummary.value = it }.onFailure { _gatewayError.value = it.localizedMessage ?: "تعذر تحميل usage من Gateway" }
+        result
+    }
+
+    suspend fun refreshGatewayCapabilities(): Result<GatewayProcessingCapabilities> = withContext(Dispatchers.IO) {
+        val result = processingGatewayClient.capabilities(_gatewayConfig.value)
+        result.onSuccess { _gatewayCapabilities.value = it }.onFailure { _gatewayError.value = it.localizedMessage ?: "تعذر تحميل قدرات Gateway" }
+        result
     }
 
     suspend fun testGatewayConnection(): Result<String> = withContext(Dispatchers.IO) {

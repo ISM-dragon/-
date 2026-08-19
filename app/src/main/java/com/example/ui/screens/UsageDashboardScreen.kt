@@ -20,6 +20,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -30,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.AiUsageAggregate
+import com.example.data.model.GatewayUsageAggregate
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.repository.OpusRepository
 import com.example.ui.theme.OpusDarkCanvas
@@ -50,6 +52,16 @@ fun UsageDashboardScreen(
 ) {
     val aggregates by repository.observeRecentAiUsageAggregates(30).collectAsState(initial = emptyList())
     val jobs by repository.processingJobs.collectAsState(initial = emptyList())
+    val gatewayConfig by repository.gatewayConfig.collectAsState()
+    val gatewayUsage by repository.gatewayUsageSummary.collectAsState()
+    val gatewayProviders by repository.gatewayProviders.collectAsState()
+
+    LaunchedEffect(gatewayConfig.baseUrl) {
+        if (gatewayConfig.baseUrl.isNotBlank()) {
+            repository.refreshGatewayUsage(30)
+            repository.refreshGatewayAiRegistry()
+        }
+    }
     val activeJobs = remember(jobs) {
         jobs.filter { it.status == ProcessingJobEntity.STATUS_QUEUED || it.status == ProcessingJobEntity.STATUS_RUNNING }
     }
@@ -129,16 +141,24 @@ fun UsageDashboardScreen(
         }
 
         item {
-            Text("الاستهلاك حسب المزود والنموذج", color = OpusTextPrimary, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+            Text("الاستهلاك المحلي حسب المزود والنموذج", color = OpusTextPrimary, fontWeight = FontWeight.Bold, fontSize = 17.sp)
         }
 
         if (aggregates.isEmpty()) {
-            item {
-                EmptyUsageCard()
-            }
+            item { EmptyUsageCard() }
         } else {
-            items(aggregates, key = { "${it.provider}:${it.model}" }) { aggregate ->
-                ProviderUsageCard(aggregate)
+            items(aggregates, key = { "local:${it.provider}:${it.model}" }) { aggregate -> ProviderUsageCard(aggregate) }
+        }
+
+        item {
+            Text("استهلاك Gateway البعيد", color = OpusTextPrimary, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+        }
+        if (gatewayUsage == null) {
+            item { RemoteUsageNotice(gatewayConfig.baseUrl.isBlank()) }
+        } else {
+            items(gatewayUsage?.aggregates.orEmpty(), key = { "remote:${it.provider}:${it.model}" }) { aggregate -> RemoteProviderUsageCard(aggregate) }
+            item {
+                Text("سجل المزودين البعيد: ${gatewayProviders.size} مزودًا — لا يتم عرض أي مفتاح API", color = OpusTextSecondary, fontSize = 12.sp)
             }
         }
         item { Spacer(Modifier.height(20.dp)) }
@@ -200,6 +220,39 @@ private fun ProviderUsageCard(aggregate: AiUsageAggregate) {
             SummaryLine("متوسط الكمون", "${aggregate.averageLatencyMs.toInt()} ms")
         }
     }
+}
+
+@Composable
+private fun RemoteProviderUsageCard(aggregate: GatewayUsageAggregate) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Column(Modifier.padding(15.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text(aggregate.provider, color = OpusElectricCyan, fontWeight = FontWeight.Bold)
+                    Text(aggregate.model, color = OpusTextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text(formatUsd(aggregate.costUsd), color = OpusGold, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            SummaryLine("التوكنز", formatInteger(aggregate.totalTokens))
+            SummaryLine("الطلبات / التقديرية", "${aggregate.requests} / ${aggregate.estimatedRequests}")
+            SummaryLine("متوسط الكمون", "${aggregate.averageLatencyMs.toInt()} ms")
+        }
+    }
+}
+
+@Composable
+private fun RemoteUsageNotice(noGateway: Boolean) {
+    Text(
+        if (noGateway) "أضف Gateway URL في الإعدادات لعرض الاستخدام البعيد." else "لا توجد بيانات usage بعيدة في هذه الفترة.",
+        color = OpusTextSecondary,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(vertical = 12.dp)
+    )
 }
 
 @Composable

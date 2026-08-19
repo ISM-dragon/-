@@ -54,7 +54,8 @@ class ProcessingGatewayClient(
             val localUri = Uri.parse(sourceUri)
             val upload = upload(baseUrl, config.token, localUri)
             onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
-            val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode)
+            val project = createProject(config, "Android session ${System.currentTimeMillis()}", upload).getOrThrow()
+            val gatewayJobId = processProject(config, project.id, upload, captionTheme, mode).getOrThrow().id
             var lastStatus = "queued"
             var completedPayload: JSONObject? = null
             while (completedPayload == null) {
@@ -164,6 +165,132 @@ class ProcessingGatewayClient(
             }
         }
     }
+
+    suspend fun listProviders(config: GatewayConfig): Result<List<com.example.data.model.GatewayProviderModel>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = openConnection(gatewayUrl(config, "/v1/ai/providers"), config.token, "GET")
+            try { parseProviders(readJson(connection)) } finally { connection.disconnect() }
+        }
+    }
+
+    suspend fun usageSummary(config: GatewayConfig, days: Int = 30): Result<com.example.data.model.GatewayUsageSummary> = withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = openConnection(gatewayUrl(config, "/v1/ai/usage?days=${days.coerceIn(1, 3650)}"), config.token, "GET")
+            try { parseUsage(readJson(connection)) } finally { connection.disconnect() }
+        }
+    }
+
+    suspend fun capabilities(config: GatewayConfig): Result<com.example.data.model.GatewayProcessingCapabilities> = withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = openConnection(gatewayUrl(config, "/v1/processing/capabilities"), config.token, "GET")
+            try {
+                val json = readJson(connection)
+                com.example.data.model.GatewayProcessingCapabilities(
+                    pipeline = json.optBoolean("pipeline"),
+                    python = json.optBoolean("python"),
+                    ffmpeg = json.optBoolean("ffmpeg"),
+                    storage = json.optBoolean("storage"),
+                    geminiConfigured = json.optBoolean("gemini_configured"),
+                    androidRemoteProcessing = json.optBoolean("android_remote_processing"),
+                    youtubeUrls = json.optBoolean("youtube_urls"),
+                    httpsUrls = json.optBoolean("https_urls")
+                )
+            } finally { connection.disconnect() }
+        }
+    }
+
+    suspend fun createProject(config: GatewayConfig, name: String, source: String?): Result<com.example.data.model.GatewayProject> = withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = openConnection(gatewayUrl(config, "/api/v1/projects"), config.token, "POST").apply {
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                doOutput = true
+            }
+            try {
+                val body = JSONObject().put("name", name).apply { if (!source.isNullOrBlank()) put("source", source) }
+                connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                parseProject(readJson(connection))
+            } finally { connection.disconnect() }
+        }
+    }
+
+    suspend fun processProject(config: GatewayConfig, projectId: String, source: String?, captionTheme: String, mode: String): Result<com.example.data.model.GatewayJob> = withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = openConnection(gatewayUrl(config, "/api/v1/projects/${encodePath(projectId)}/process"), config.token, "POST").apply {
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                doOutput = true
+            }
+            try {
+                val body = JSONObject()
+                    .put("llm", "gemini")
+                    .put("captions", captionTheme.ifBlank { "classic" })
+                    .apply { if (!source.isNullOrBlank()) put("source", source) }
+                connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                readJson(connection).optJSONObject("job")?.let { parseJob(it) }
+                    ?: error("Gateway لم يُرجع job للمشروع")
+            } finally { connection.disconnect() }
+        }
+    }
+
+    suspend fun cancelJob(config: GatewayConfig, jobId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = openConnection(gatewayUrl(config, "/api/v1/jobs/${encodePath(jobId)}/cancel"), config.token, "POST")
+            try { readJson(connection).optString("status") == "cancelled" } finally { connection.disconnect() }
+        }
+    }
+
+    private fun gatewayUrl(config: GatewayConfig, path: String): String = "${validateBaseUrl(config.baseUrl)}$path"
+
+    private fun encodePath(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
+
+    private fun parseProviders(json: JSONObject): List<com.example.data.model.GatewayProviderModel> {
+        val array = json.optJSONArray("providers") ?: return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val capabilities = mutableMapOf<String, Boolean>()
+                item.optJSONObject("capabilities")?.let { obj ->
+                    obj.keys().forEach { key -> capabilities[key] = obj.optBoolean(key) }
+                }
+                add(com.example.data.model.GatewayProviderModel(
+                    id = item.optString("id"), name = item.optString("name"), type = item.optString("type"),
+                    baseUrl = item.optString("base_url"), defaultModel = item.optString("default_model"),
+                    fallbackModel = item.optString("fallback_model"), enabled = item.optBoolean("enabled", true),
+                    credentialConfigured = item.optBoolean("credential_configured"), capabilities = capabilities,
+                    inputCostPerMillionUsd = item.optDouble("input_cost_per_million", 0.0),
+                    outputCostPerMillionUsd = item.optDouble("output_cost_per_million", 0.0)
+                ))
+            }
+        }
+    }
+
+    private fun parseUsage(json: JSONObject): com.example.data.model.GatewayUsageSummary {
+        val aggregates = buildList {
+            val array = json.optJSONArray("aggregates") ?: JSONArray()
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                add(com.example.data.model.GatewayUsageAggregate(
+                    provider = item.optString("provider"), model = item.optString("model"),
+                    requests = item.optInt("requests"), inputTokens = item.optLong("input_tokens"),
+                    outputTokens = item.optLong("output_tokens"), totalTokens = item.optLong("total_tokens"),
+                    estimatedRequests = item.optInt("estimated_requests"), averageLatencyMs = item.optDouble("average_latency_ms"),
+                    costUsd = item.optDouble("cost_usd")
+                ))
+            }
+        }
+        return com.example.data.model.GatewayUsageSummary(json.optInt("days"), json.optInt("events"), aggregates)
+    }
+
+    private fun parseProject(json: JSONObject): com.example.data.model.GatewayProject = com.example.data.model.GatewayProject(
+        id = json.optString("id"), name = json.optString("name"), source = json.optString("source").ifBlank { null },
+        status = json.optString("status"), activeJobId = json.optString("active_job_id").ifBlank { null }
+    )
+
+    private fun parseJob(json: JSONObject): com.example.data.model.GatewayJob = com.example.data.model.GatewayJob(
+        id = json.optString("id"), status = json.optString("status"), stage = json.optString("stage").ifBlank { null },
+        fraction = if (json.has("fraction") && !json.isNull("fraction")) json.optDouble("fraction") else null,
+        message = json.optString("message").ifBlank { null }, error = json.optString("error").ifBlank { null },
+        projectId = json.optString("project_id").ifBlank { null }
+    )
 
     private fun openConnection(url: String, token: String, method: String): HttpURLConnection =
         (URI(url).toURL().openConnection() as HttpURLConnection).apply {
