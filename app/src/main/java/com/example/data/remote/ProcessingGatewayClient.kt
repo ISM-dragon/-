@@ -56,7 +56,8 @@ class ProcessingGatewayClient(
             onProgress(Progress(12, "UPLOADED", "تم رفع الفيديو إلى Gateway بشكل خاص"))
             val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode)
             var lastStatus = "queued"
-            while (true) {
+            var completedPayload: JSONObject? = null
+            while (completedPayload == null) {
                 val statusPayload = status(baseUrl, config.token, gatewayJobId)
                 val fraction = statusPayload.optDouble("fraction", 0.0).toFloat().coerceIn(0f, 1f)
                 val percent = (15 + fraction * 80f).toInt().coerceIn(15, 95)
@@ -69,14 +70,15 @@ class ProcessingGatewayClient(
                 when (statusPayload.optString("status")) {
                     "done", "completed", "succeeded" -> {
                         onProgress(Progress(100, "COMPLETED", "اكتملت المعالجة البعيدة"))
-                        return@withContext Result.success(RemoteResult(gatewayJobId, parseClips(statusPayload)))
+                        completedPayload = statusPayload
                     }
                     "failed", "error" -> error(statusPayload.optString("error", "فشلت معالجة Gateway"))
                 }
-                delay(POLL_INTERVAL_MS)
+                if (completedPayload == null) delay(POLL_INTERVAL_MS)
             }
+            Result.success(RemoteResult(gatewayJobId, parseClips(checkNotNull(completedPayload))))
         } catch (error: Exception) {
-            return@withContext Result.failure<RemoteResult>(error)
+            Result.failure<RemoteResult>(error)
         }
     }
 
