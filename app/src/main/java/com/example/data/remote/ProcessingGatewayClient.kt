@@ -49,7 +49,7 @@ class ProcessingGatewayClient(
         mode: String,
         onProgress: suspend (Progress) -> Unit
     ): Result<RemoteResult> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val baseUrl = validateBaseUrl(config.baseUrl)
             val localUri = Uri.parse(sourceUri)
             val upload = upload(baseUrl, config.token, localUri)
@@ -57,24 +57,26 @@ class ProcessingGatewayClient(
             val gatewayJobId = start(baseUrl, config.token, upload, captionTheme, mode)
             var lastStatus = "queued"
             while (true) {
-                val status = status(baseUrl, config.token, gatewayJobId)
-                val fraction = status.optDouble("fraction", 0.0).toFloat().coerceIn(0f, 1f)
+                val statusPayload = status(baseUrl, config.token, gatewayJobId)
+                val fraction = statusPayload.optDouble("fraction", 0.0).toFloat().coerceIn(0f, 1f)
                 val percent = (15 + fraction * 80f).toInt().coerceIn(15, 95)
-                val stage = status.optString("stage", status.optString("status", "processing"))
-                val message = status.optString("message", "جاري تنفيذ المعالجة على Gateway")
+                val stage = statusPayload.optString("stage", statusPayload.optString("status", "processing"))
+                val message = statusPayload.optString("message", "جاري تنفيذ المعالجة على Gateway")
                 if (stage != lastStatus || percent >= 95) {
                     onProgress(Progress(percent, stage, message))
                     lastStatus = stage
                 }
-                when (status.optString("status")) {
+                when (statusPayload.optString("status")) {
                     "done", "completed", "succeeded" -> {
                         onProgress(Progress(100, "COMPLETED", "اكتملت المعالجة البعيدة"))
-                        return@runCatching RemoteResult(gatewayJobId, parseClips(status))
+                        return@withContext Result.success(RemoteResult(gatewayJobId, parseClips(statusPayload)))
                     }
-                    "failed", "error" -> error(status.optString("error", "فشلت معالجة Gateway"))
+                    "failed", "error" -> error(statusPayload.optString("error", "فشلت معالجة Gateway"))
                 }
                 delay(POLL_INTERVAL_MS)
             }
+        } catch (error: Exception) {
+            Result.failure(error)
         }
     }
 
