@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Folder
@@ -54,6 +55,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -129,6 +131,7 @@ fun HomeScreen(
     val googleFlowCredits by repository.googleFlowCredits.collectAsState()
     val aiProviders by repository.aiProviders.collectAsState()
     val allProjects by repository.allProjects.collectAsState(initial = emptyList())
+    val latestUnfinishedDraft by repository.latestUnfinishedDraft.collectAsState(initial = null)
 
     var inputSourceMode by remember { mutableIntStateOf(0) } // 0: URL / Prompt, 1: Device Media Picker
     var videoUrl by remember { mutableStateOf("") }
@@ -252,6 +255,152 @@ fun HomeScreen(
         if (processingStep !is ProcessingStep.Idle) {
             item {
                 ProcessingPipelineCard(step = processingStep)
+            }
+        }
+
+        // Unfinished Video Draft Resume Card (Room Database Draft Auto-Save)
+        latestUnfinishedDraft?.let { draft ->
+            if (draft.isUnfinished && processingStep is ProcessingStep.Idle && !isProcessing) {
+                item {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .testTag("resume_draft_card"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = OpusDarkSurfaceVariant),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, OpusElectricCyan.copy(alpha = 0.6f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(OpusElectricCyan.copy(alpha = 0.15f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Folder,
+                                            contentDescription = "Draft",
+                                            tint = OpusElectricCyan,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "مسودة معالجة غير مكتملة",
+                                            style = MaterialTheme.typography.titleSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = OpusTextPrimary
+                                            )
+                                        )
+                                        Text(
+                                            text = "تم الحفظ تلقائياً في Room • ${draft.lastProcessingStep}",
+                                            fontSize = 11.sp,
+                                            color = OpusElectricCyan
+                                        )
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            repository.deleteDraft(draft.id)
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Discard Draft",
+                                        tint = OpusTextSecondary.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Text(
+                                text = draft.title,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = OpusTextPrimary
+                                )
+                            )
+
+                            if (draft.sourceUrl.isNotBlank()) {
+                                Text(
+                                    text = draft.sourceUrl,
+                                    fontSize = 12.sp,
+                                    color = OpusTextSecondary,
+                                    maxLines = 1
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        videoTitle = draft.title
+                                        videoUrl = draft.sourceUrl
+                                        transcriptPrompt = draft.transcriptPrompt
+                                        durationMinutes = draft.durationMinutes
+                                        selectedPlatform = draft.targetPlatform
+                                        selectedCaptionTheme = draft.captionTheme
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = OpusElectricCyan)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayArrow,
+                                        contentDescription = "Resume",
+                                        tint = OpusDarkCanvas,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "استئناف التحرير",
+                                        fontWeight = FontWeight.Bold,
+                                        color = OpusDarkCanvas,
+                                        fontSize = 12.sp
+                                    )
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            repository.deleteDraft(draft.id)
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, OpusHotPink.copy(alpha = 0.5f))
+                                ) {
+                                    Text(
+                                        text = "حذف المسودة",
+                                        color = OpusHotPink,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

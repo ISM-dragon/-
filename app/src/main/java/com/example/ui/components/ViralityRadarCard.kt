@@ -60,13 +60,10 @@ fun ViralityRadarCard(
     modifier: Modifier = Modifier,
     onCompareClick: (() -> Unit)? = null
 ) {
-    ViralityScoreGauge(
-        score = clip.viralityScore,
+    ViralityAnalysisCard(
         clip = clip,
-        onCompareClick = onCompareClick,
-        showSubmetrics = true,
-        showActionButtons = onCompareClick != null,
-        modifier = modifier
+        modifier = modifier,
+        onCompareClick = onCompareClick
     )
 }
 
