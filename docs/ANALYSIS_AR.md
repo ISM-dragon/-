@@ -153,6 +153,7 @@ python3 -m venv .venv && .venv/bin/pip install -r gateway/requirements.txt
 .venv/bin/python -m pytest gateway/tests -q
 ```
 
-**حالة التحقق من هذا التقرير**: فتح PR (#2) من الفرع `arena/01a08395-repo` نحو `main`؛
-تشغيل `Build and Release APK` (بناء APK + اختبارات JVM) هو دليل الإصلاح — بينما كان نفس الـ workflow
-يفشل على آخر commit في main.
+**حالة التحقق من هذا التقرير (2026-09-09)**: فُتح PR #2 من الفرع `arena/01a08395-repo` نحو `main`،
+وتشغيل `Build and Release APK` (46 اختبار JVM + بناء APK) على الفرع انتهى **بنجاح كامل** — بينما كان
+نفس الـ workflow **يفشل** على آخر commit في main (run #32981778744). أي أن الإصلاح موثَّق بالبناء
+الأخضر على الفرع مقابل الأحمر على main.
