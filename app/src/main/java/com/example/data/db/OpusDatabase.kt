@@ -4,7 +4,10 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.data.model.AiUsageEntity
 import com.example.data.model.Clip
+import com.example.data.model.PipelineCheckpointEntity
+import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.Project
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.VideoProcessingCacheEntity
@@ -18,9 +21,14 @@ import com.example.data.model.ViralScoreMetricEntity
         VideoProcessingCacheEntity::class,
         ViralScoreMetricEntity::class,
         RepurposingHistoryEntity::class,
-        VideoProcessingDraftEntity::class
+        VideoProcessingDraftEntity::class,
+        // Worker/queue tables consumed by VideoProcessingWorker and the UI
+        // progress surfaces (Projects, Usage Dashboard, Video Upload).
+        ProcessingJobEntity::class,
+        PipelineCheckpointEntity::class,
+        AiUsageEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class OpusDatabase : RoomDatabase() {
@@ -30,6 +38,9 @@ abstract class OpusDatabase : RoomDatabase() {
     abstract fun viralScoreMetricDao(): ViralScoreMetricDao
     abstract fun repurposingHistoryDao(): RepurposingHistoryDao
     abstract fun videoProcessingDraftDao(): VideoProcessingDraftDao
+    abstract fun processingJobDao(): ProcessingJobDao
+    abstract fun pipelineCheckpointDao(): PipelineCheckpointDao
+    abstract fun aiUsageDao(): AiUsageDao
 
     companion object {
         @Volatile

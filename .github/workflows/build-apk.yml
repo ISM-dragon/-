@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - master
+  # Verify every feature branch with a debug APK build before it merges.
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -39,6 +41,11 @@ jobs:
             -keysize 2048 \
             -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Run JVM Unit Tests
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build Debug APK
         run: |

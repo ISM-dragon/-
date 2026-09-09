@@ -113,6 +113,7 @@ import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
 import com.example.ui.theme.OpusViralEmerald
 import com.example.ui.theme.OpusVioletGlow
+import com.example.ui.util.ProcessingUiLabels
 import kotlinx.coroutines.launch
 
 @Composable
@@ -306,7 +307,7 @@ fun HomeScreen(
                                             )
                                         )
                                         Text(
-                                            text = "تم الحفظ تلقائياً في Room • ${draft.lastProcessingStep}",
+                                            text = "محفوظة تلقائيًا • ${ProcessingUiLabels.stage(draft.lastProcessingStep)}",
                                             fontSize = 11.sp,
                                             color = OpusElectricCyan
                                         )
@@ -357,11 +358,16 @@ fun HomeScreen(
                                 Button(
                                     onClick = {
                                         videoTitle = draft.title
-                                        videoUrl = draft.sourceUrl
+                                        videoUrl = if (draft.sourceUrl.startsWith("http", ignoreCase = true)) draft.sourceUrl else ""
                                         transcriptPrompt = draft.transcriptPrompt
                                         durationMinutes = draft.durationMinutes
                                         selectedPlatform = draft.targetPlatform
                                         selectedCaptionTheme = draft.captionTheme
+                                        if (!draft.sourceUrl.startsWith("http", ignoreCase = true)) {
+                                            // Local picker URIs expire between sessions; ask for the file again.
+                                            inputSourceMode = 1
+                                            Toast.makeText(context, "اختر ملف الفيديو المحلي لاستئناف المسودة.", Toast.LENGTH_LONG).show()
+                                        }
                                     },
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(10.dp),

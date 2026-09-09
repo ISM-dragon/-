@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -36,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
@@ -130,7 +133,6 @@ fun ClipStudioScreen(
     var showExportModal by remember { mutableStateOf(false) }
     var isExporting by remember { mutableStateOf(false) }
     var exportProgress by remember { mutableIntStateOf(0) }
-    var exportResolution by remember { mutableStateOf("1080p (Full HD)") }
     var removeWatermark by remember { mutableStateOf(true) }
 
     var showAutoPublishSettingsDialog by remember { mutableStateOf(false) }
@@ -548,44 +550,52 @@ fun ClipStudioScreen(
             text = {
                 Column {
                     Text(
-                        text = "Choose resolution & rendering parameters:",
-                        fontSize = 12.sp,
+                        text = "تُرَمَّز المقاطع محليًا بترميز H.264/AAC بدقة المصدر مع القصّ والنسبة المختارة.",
+                        fontSize = 11.sp,
                         color = OpusTextSecondary
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    listOf("1080p (Full HD)", "4K Ultra HD (60fps)").forEach { res ->
-                        val isSel = exportResolution == res
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isSel) OpusDarkSurfaceHighlight else OpusDarkSurfaceVariant)
-                                .border(1.dp, if (isSel) OpusElectricCyan else OpusBorder, RoundedCornerShape(8.dp))
-                                .clickable { exportResolution = res }
-                                .padding(10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = res,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSel) OpusElectricCyan else OpusTextPrimary
-                                )
-                                if (isSel) {
-                                    Icon(Icons.Default.Check, contentDescription = "Selected", tint = OpusElectricCyan, modifier = Modifier.size(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val clip = activeClip ?: return@OutlinedButton
+                                val srt = repository.exportClipSrt(clip)
+                                if (srt.isBlank()) {
+                                    Toast.makeText(context, "لا توجد كلمات مؤقتة لإنشاء SRT.", Toast.LENGTH_SHORT).show()
+                                    return@OutlinedButton
                                 }
-                            }
+                                context.getSystemService(ClipboardManager::class.java)
+                                    .setPrimaryClip(ClipData.newPlainText("ISM SRT", srt))
+                                Toast.makeText(context, "تم نسخ ملف SRT إلى الحافظة.", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("نسخ SRT", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                val clip = activeClip ?: return@OutlinedButton
+                                val vtt = repository.exportClipVtt(clip)
+                                if (vtt.isBlank()) {
+                                    Toast.makeText(context, "لا توجد كلمات مؤقتة لإنشاء VTT.", Toast.LENGTH_SHORT).show()
+                                    return@OutlinedButton
+                                }
+                                context.getSystemService(ClipboardManager::class.java)
+                                    .setPrimaryClip(ClipData.newPlainText("ISM VTT", vtt))
+                                Toast.makeText(context, "تم نسخ ملف VTT إلى الحافظة.", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("نسخ VTT", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // Burn-In Subtitles Switch
                     Row(

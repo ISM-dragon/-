@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
@@ -85,6 +86,7 @@ import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
 import com.example.ui.theme.OpusViralEmerald
 import com.example.ui.theme.OpusVioletGlow
+import com.example.ui.util.ProcessingUiLabels
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -108,6 +110,11 @@ fun ProjectsScreen(
     val activeProcessingJobs = remember(processingJobs) {
         processingJobs.filter {
             it.status == ProcessingJobEntity.STATUS_QUEUED || it.status == ProcessingJobEntity.STATUS_RUNNING
+        }
+    }
+    val stoppedJobs = remember(processingJobs) {
+        processingJobs.filter {
+            it.status == ProcessingJobEntity.STATUS_FAILED || it.status == ProcessingJobEntity.STATUS_CANCELLED
         }
     }
 
@@ -261,13 +268,64 @@ fun ProjectsScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(job.title, color = OpusTextPrimary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text("${job.currentStage} • ${job.progress}%", color = OpusElectricCyan, fontSize = 10.sp)
+                                    Text("${ProcessingUiLabels.stage(job.currentStage, job.status)} • ${job.progress}%", color = OpusElectricCyan, fontSize = 10.sp)
                                 }
                                 IconButton(
                                     onClick = { coroutineScope.launch { repository.cancelVideoProcessing(job.jobId) } },
                                     modifier = Modifier.size(30.dp)
                                 ) {
                                     Icon(Icons.Default.Delete, contentDescription = "Cancel processing", tint = OpusHotPink)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (stoppedJobs.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = OpusDarkSurface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, OpusHotPink.copy(alpha = 0.4f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "مهام متوقفة (${stoppedJobs.size})",
+                            color = OpusTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "أعد المحاولة بعد التحقق من الاتصال والمفتاح",
+                            color = OpusTextSecondary,
+                            fontSize = 10.sp
+                        )
+                        stoppedJobs.take(3).forEach { job ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(job.title, color = OpusTextPrimary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        "${ProcessingUiLabels.stage(job.currentStage, job.status)} • ${job.progress}%",
+                                        color = if (job.status == ProcessingJobEntity.STATUS_FAILED) OpusHotPink else OpusTextSecondary,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            repository.retryVideoProcessing(job.jobId)
+                                            Toast.makeText(context, "أُعيدت المهمة إلى الطابور.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.size(30.dp)
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Retry processing", tint = OpusElectricCyan)
                                 }
                             }
                         }

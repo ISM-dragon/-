@@ -24,5 +24,11 @@ data class VideoProcessingDraftEntity(
     val isUnfinished: Boolean = true,
     val detectedNiche: String = "General Content",
     val partialClipsJson: String = "[]",
-    val lastUpdated: Long = System.currentTimeMillis()
+    val lastUpdated: Long = System.currentTimeMillis(),
+    /**
+     * Links this draft to the background [com.example.data.worker.VideoProcessingWorker]
+     * job that owns it, so interrupted work can be resumed or cleaned up after the
+     * worker reaches a terminal state while the app is closed.
+     */
+    val jobId: String = ""
 )

@@ -9,6 +9,7 @@ import com.example.data.db.OpusDatabase
 import com.example.data.model.GatewayConfig
 import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.Project
+import com.example.data.model.VideoProcessingDraftEntity
 import com.example.data.remote.ProcessingGatewayClient
 import com.example.data.repository.OpusRepository
 import com.example.data.video.MediaUriStabilizer
@@ -31,6 +32,7 @@ class VideoProcessingWorker(
 
     private val database = OpusDatabase.getDatabase(appContext)
     private val jobs = database.processingJobDao()
+    private val drafts = database.videoProcessingDraftDao()
 
     override suspend fun doWork(): Result {
         var jobId = inputData.getString(KEY_JOB_ID).orEmpty()
@@ -54,10 +56,34 @@ class VideoProcessingWorker(
                     captionTheme = captionTheme
                 )
             )
+            mirrorDraft(
+                jobId = jobId,
+                title = title,
+                sourceUri = sourceUri,
+                transcriptOrPrompt = transcriptOrPrompt,
+                durationMinutes = durationMinutes,
+                targetPlatform = targetPlatform,
+                captionTheme = captionTheme,
+                stage = "QUEUED",
+                progressPercent = 0f
+            )
         }
         if (jobId.isBlank() || sourceUri.isBlank() || title.isBlank() || durationMinutes <= 0) {
             return Result.failure(workDataOf(KEY_ERROR to "بيانات مهمة المعالجة غير مكتملة."))
         }
+        // Auto-resume support: if the app was killed while this job was in flight,
+        // make sure a draft row exists so the UI can surface progress on next launch.
+        mirrorDraft(
+            jobId = jobId,
+            title = title,
+            sourceUri = sourceUri,
+            transcriptOrPrompt = transcriptOrPrompt,
+            durationMinutes = durationMinutes,
+            targetPlatform = targetPlatform,
+            captionTheme = captionTheme,
+            stage = "QUEUED",
+            progressPercent = 0f
+        )
         val parsedSource = runCatching { Uri.parse(sourceUri) }.getOrNull()
         if (parsedSource?.scheme !in setOf("content", "file")) {
             val message = "مصدر الفيديو غير صالح أو غير محلي."
@@ -68,6 +94,7 @@ class VideoProcessingWorker(
                 stage = "FAILED",
                 errorMessage = message
             )
+            drafts.markDraftAsFinishedByJobId(jobId)
             ProcessingNotification.show(applicationContext, jobId, "فشلت معالجة ISM", message, success = false)
             return Result.failure(workDataOf(KEY_JOB_ID to jobId, KEY_ERROR to message))
         }
@@ -83,6 +110,17 @@ class VideoProcessingWorker(
             progress = 5,
             stage = "VALIDATING",
             errorMessage = ""
+        )
+        mirrorDraft(
+            jobId = jobId,
+            title = title,
+            sourceUri = sourceUri,
+            transcriptOrPrompt = transcriptOrPrompt,
+            durationMinutes = durationMinutes,
+            targetPlatform = targetPlatform,
+            captionTheme = captionTheme,
+            stage = "VALIDATING",
+            progressPercent = 5f
         )
         setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to 5, KEY_STAGE to "VALIDATING"))
 
@@ -108,6 +146,7 @@ class VideoProcessingWorker(
                     stage = "COMPLETED",
                     outputProjectId = remoteProjectId
                 )
+                drafts.markDraftAsFinishedByJobId(jobId)
                 ProcessingNotification.show(
                     applicationContext,
                     jobId,
@@ -130,7 +169,18 @@ class VideoProcessingWorker(
             val pipeline = ProductionVideoPipeline(
                 repository = repository,
                 context = applicationContext,
-                onStageChanged = { pipelineJob -> syncPipelineState(jobId, pipelineJob) }
+                onStageChanged = { pipelineJob ->
+                    syncPipelineState(
+                        jobId = jobId,
+                        pipelineJob = pipelineJob,
+                        title = title,
+                        sourceUri = sourceUri,
+                        transcriptOrPrompt = transcriptOrPrompt,
+                        durationMinutes = durationMinutes,
+                        targetPlatform = targetPlatform,
+                        captionTheme = captionTheme
+                    )
+                }
             )
             val result = pipeline.executePipeline(
                 project = project,
@@ -150,6 +200,7 @@ class VideoProcessingWorker(
                     stage = "COMPLETED",
                     outputProjectId = projectId
                 )
+                drafts.markDraftAsFinishedByJobId(jobId)
                 ProcessingNotification.show(
                     applicationContext,
                     jobId,
@@ -171,6 +222,7 @@ class VideoProcessingWorker(
                 stage = "CANCELLED",
                 errorMessage = "تم إلغاء المعالجة."
             )
+            drafts.markDraftAsFinishedByJobId(jobId)
             ProcessingNotification.show(
                 applicationContext,
                 jobId,
@@ -191,6 +243,17 @@ class VideoProcessingWorker(
                     stage = "RETRY_WAIT",
                     errorMessage = String.format(Locale.ROOT, "إعادة المحاولة %d: %s", attempt, message)
                 )
+                mirrorDraft(
+                    jobId = jobId,
+                    title = title,
+                    sourceUri = sourceUri,
+                    transcriptOrPrompt = transcriptOrPrompt,
+                    durationMinutes = durationMinutes,
+                    targetPlatform = targetPlatform,
+                    captionTheme = captionTheme,
+                    stage = "RETRY_WAIT",
+                    progressPercent = preservedProgress.toFloat()
+                )
                 Result.retry()
             } else {
                 jobs.updateState(
@@ -200,6 +263,7 @@ class VideoProcessingWorker(
                     stage = "FAILED",
                     errorMessage = String.format(Locale.ROOT, "المحاولة %d: %s", attempt, message)
                 )
+                drafts.markDraftAsFinishedByJobId(jobId)
                 ProcessingNotification.show(
                     applicationContext,
                     jobId,
@@ -207,7 +271,9 @@ class VideoProcessingWorker(
                     message,
                     success = false
                 )
-                MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
+                // Keep the managed copy of the source on final failure so the new
+                // "retry" action in Projects can re-run the same job without asking
+                // the user to pick the video again.
                 Result.failure(workDataOf(KEY_JOB_ID to jobId, KEY_ERROR to message))
             }
         }
@@ -249,6 +315,18 @@ class VideoProcessingWorker(
                     stage = progress.stage,
                     errorMessage = ""
                 )
+                mirrorDraft(
+                    jobId = jobId,
+                    title = title,
+                    sourceUri = sourceUri,
+                    // Remote mode: the Gateway owns ASR; the transcript prompt is not needed.
+                    transcriptOrPrompt = "",
+                    durationMinutes = durationMinutes,
+                    targetPlatform = targetPlatform,
+                    captionTheme = captionTheme,
+                    stage = progress.stage,
+                    progressPercent = progress.percent.toFloat()
+                )
                 setProgress(workDataOf(KEY_JOB_ID to jobId, KEY_PROGRESS to progress.percent, KEY_STAGE to progress.stage, KEY_MESSAGE to progress.message))
             }
         ).getOrThrow()
@@ -271,7 +349,16 @@ class VideoProcessingWorker(
         )
     }
 
-    private suspend fun syncPipelineState(jobId: String, pipelineJob: PipelineJob) {
+    private suspend fun syncPipelineState(
+        jobId: String,
+        pipelineJob: PipelineJob,
+        title: String,
+        sourceUri: String,
+        transcriptOrPrompt: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String
+    ) {
         val stage = pipelineJob.currentStage
         val stageProgress = pipelineJob.stages[stage]
         val status = when (pipelineJob.overallStatus) {
@@ -291,6 +378,24 @@ class VideoProcessingWorker(
             errorMessage = pipelineJob.errorDetails ?: stageProgress?.errorMessage.orEmpty(),
             outputProjectId = pipelineJob.projectId
         )
+        if (status == ProcessingJobEntity.STATUS_SUCCEEDED ||
+            status == ProcessingJobEntity.STATUS_FAILED ||
+            status == ProcessingJobEntity.STATUS_CANCELLED
+        ) {
+            drafts.markDraftAsFinishedByJobId(jobId)
+        } else {
+            mirrorDraft(
+                jobId = jobId,
+                title = title,
+                sourceUri = sourceUri,
+                transcriptOrPrompt = transcriptOrPrompt,
+                durationMinutes = durationMinutes,
+                targetPlatform = targetPlatform,
+                captionTheme = captionTheme,
+                stage = stage.name,
+                progressPercent = progress.toFloat()
+            )
+        }
         setProgress(
             workDataOf(
                 KEY_JOB_ID to jobId,
@@ -300,6 +405,53 @@ class VideoProcessingWorker(
                 KEY_PROJECT_ID to pipelineJob.projectId
             )
         )
+    }
+
+    /**
+     * Upserts the user-visible draft row that mirrors this background job, so the UI
+     * can offer resumption/cancellation even if the app process died mid-run.
+     * Rows already marked finished are intentionally left untouched.
+     */
+    private suspend fun mirrorDraft(
+        jobId: String,
+        title: String,
+        sourceUri: String,
+        transcriptOrPrompt: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String,
+        stage: String,
+        progressPercent: Float
+    ) {
+        if (jobId.isBlank()) return
+        val existing = drafts.getDraftByJobIdSync(jobId)
+        if (existing != null && !existing.isUnfinished) return
+        if (existing == null) {
+            drafts.insertOrUpdateDraft(
+                VideoProcessingDraftEntity(
+                    jobId = jobId,
+                    title = title.ifBlank { "مسودة معالجة فيديو" },
+                    sourceUrl = sourceUri,
+                    transcriptPrompt = transcriptOrPrompt,
+                    durationMinutes = durationMinutes,
+                    targetPlatform = targetPlatform,
+                    captionTheme = captionTheme,
+                    lastProcessingStep = stage.ifBlank { "Idle" },
+                    progressPercent = progressPercent.coerceIn(0f, 100f),
+                    isUnfinished = true,
+                    lastUpdated = System.currentTimeMillis()
+                )
+            )
+        } else {
+            drafts.updateDraft(
+                existing.copy(
+                    lastProcessingStep = stage.ifBlank { existing.lastProcessingStep },
+                    progressPercent = progressPercent.coerceIn(0f, 100f),
+                    isUnfinished = true,
+                    lastUpdated = System.currentTimeMillis()
+                )
+            )
+        }
     }
 
     private fun isRetryable(error: Exception): Boolean {

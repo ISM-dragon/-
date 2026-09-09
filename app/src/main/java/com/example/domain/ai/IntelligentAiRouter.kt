@@ -13,7 +13,13 @@ import kotlinx.coroutines.sync.withLock
  * A failure is returned to the caller; the router never fabricates a successful response.
  */
 class IntelligentAiRouter(
-    private val providers: List<AiProvider>
+    private val providers: List<AiProvider>,
+    /**
+     * Optional persistence hook invoked for every routed call (success or failure).
+     * Kept out of the router's constructor callers by defaulting to a no-op, so the
+     * router stays a pure domain component while the repository can persist usage.
+     */
+    private val usageSink: suspend (ProviderUsageRecord) -> Unit = {}
 ) {
     private val usageMutex = Mutex()
     private val _usage = mutableListOf<ProviderUsageRecord>()
@@ -123,5 +129,6 @@ class IntelligentAiRouter(
             )
         }
         usageMutex.withLock { _usage += record }
+        runCatching { usageSink(record) }
     }
 }

@@ -2,13 +2,21 @@ package com.example.data.repository
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.media.MediaScannerConnection
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import com.example.data.db.OpusDatabase
 import com.example.data.model.AiProviderConfig
 import com.example.data.model.AiProviderType
 import com.example.data.model.AiTemplateRecommendation
+import com.example.data.model.AiUsageAggregate
+import com.example.data.model.AiUsageEntity
 import com.example.data.model.AnimatedWord
 import com.example.data.model.AutoPublishConfig
 import com.example.data.model.AutoPublishResult
@@ -17,7 +25,11 @@ import com.example.data.model.ClipGenerationData
 import com.example.data.model.DedicatedCaptionResult
 import com.example.data.model.DirectApiPublishLog
 import com.example.data.model.DirectPlatformApiCredentials
+import com.example.data.model.GatewayConfig
+import com.example.data.model.GatewaySnapshot
 import com.example.data.model.GoogleFlowCreditInfo
+import com.example.data.model.PipelineCheckpointEntity
+import com.example.data.model.ProcessingJobEntity
 import com.example.data.model.Project
 import com.example.data.model.RepurposingHistoryEntity
 import com.example.data.model.SocialPostCopy
@@ -25,6 +37,10 @@ import com.example.data.model.UserCreditState
 import com.example.data.model.VideoProcessingCacheEntity
 import com.example.data.model.ViralScoreMetricEntity
 import com.example.data.remote.GeminiClipService
+import com.example.data.remote.ProcessingGatewayClient
+import com.example.domain.analysis.Transcript
+import com.example.domain.ai.ProviderUsageRecord
+import com.example.domain.pipeline.PipelineWorkScheduler
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -33,12 +49,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import org.json.JSONObject
 
 sealed class ProcessingStep(val stepNumber: Int, val title: String, val description: String) {
@@ -52,6 +71,9 @@ sealed class ProcessingStep(val stepNumber: Int, val title: String, val descript
 
 class OpusRepository(context: Context) {
 
+    /** Application-scoped context used by WorkManager, MediaStore and network helpers. */
+    private val appContext = context.applicationContext
+
     private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
     private val db = OpusDatabase.getDatabase(context)
     private val projectDao = db.projectDao()
@@ -60,6 +82,12 @@ class OpusRepository(context: Context) {
     private val viralScoreMetricDao = db.viralScoreMetricDao()
     private val repurposingHistoryDao = db.repurposingHistoryDao()
     private val videoProcessingDraftDao = db.videoProcessingDraftDao()
+    private val processingJobDao = db.processingJobDao()
+    private val pipelineCheckpointDao = db.pipelineCheckpointDao()
+    private val aiUsageDao = db.aiUsageDao()
+    private val secureKeyManager = com.example.domain.security.SecureKeyManager(appContext)
+    private val gatewayPrefs = appContext.getSharedPreferences("ism_gateway_settings", Context.MODE_PRIVATE)
+    private val socialGatewayClient = com.example.data.remote.SocialGatewayClient()
     val geminiService = GeminiClipService()
     val aiRouter = com.example.domain.ai.IntelligentAiRouter(
         listOf(
@@ -75,7 +103,10 @@ class OpusRepository(context: Context) {
                     isEnabled = true
                 )
             )
-        )
+        ),
+        // Persist every routed AI call into Room so the Usage Dashboard reflects
+        // real provider/model consumption instead of staying empty forever.
+        usageSink = { record -> persistAiUsage(record) }
     )
 
     private val apiPrefs = context.getSharedPreferences("opus_api_settings", Context.MODE_PRIVATE)
@@ -123,8 +154,14 @@ class OpusRepository(context: Context) {
     val unfinishedDrafts = videoProcessingDraftDao.getAllUnfinishedDrafts()
     val latestUnfinishedDraft = videoProcessingDraftDao.getLatestUnfinishedDraft()
 
+    /**
+     * Persists (or updates) an in-flight processing draft. When [jobId] is provided the
+     * draft row is matched on it, so the background worker and the UI never create
+     * duplicate draft rows for the same processing job.
+     */
     suspend fun saveProcessingDraft(
         draftId: Long = 0L,
+        jobId: String = "",
         title: String,
         sourceUrl: String,
         transcriptPrompt: String,
@@ -134,8 +171,19 @@ class OpusRepository(context: Context) {
         lastStep: String,
         progressPercent: Float
     ): Long = withContext(Dispatchers.IO) {
+        val existingId = if (draftId <= 0L && jobId.isNotBlank()) {
+            videoProcessingDraftDao.getDraftByJobIdSync(jobId)?.id ?: 0L
+        } else {
+            draftId
+        }
+        if (existingId <= 0L) {
+            // Keep the drafts table tidy: old finished rows are no longer needed once
+            // a brand-new processing run starts.
+            videoProcessingDraftDao.clearFinishedDrafts()
+        }
         val draft = com.example.data.model.VideoProcessingDraftEntity(
-            id = draftId,
+            id = existingId,
+            jobId = jobId,
             title = title.ifBlank { "مسودة معالجة فيديو" },
             sourceUrl = sourceUrl,
             transcriptPrompt = transcriptPrompt,
@@ -150,14 +198,478 @@ class OpusRepository(context: Context) {
         videoProcessingDraftDao.insertOrUpdateDraft(draft)
     }
 
+    /** Mirrors worker progress onto the matching draft row (no-op when the draft was discarded). */
+    suspend fun updateProcessingDraftProgress(
+        jobId: String,
+        lastStep: String,
+        progressPercent: Float
+    ): Long = withContext(Dispatchers.IO) {
+        if (jobId.isBlank()) return@withContext 0L
+        val existing = videoProcessingDraftDao.getDraftByJobIdSync(jobId)
+            ?: return@withContext 0L
+        val updated = existing.copy(
+            lastProcessingStep = lastStep,
+            progressPercent = progressPercent.coerceIn(0f, 100f),
+            isUnfinished = true,
+            lastUpdated = System.currentTimeMillis()
+        )
+        videoProcessingDraftDao.updateDraft(updated)
+        updated.id
+    }
+
     suspend fun markDraftFinished(draftId: Long) = withContext(Dispatchers.IO) {
         if (draftId > 0) {
             videoProcessingDraftDao.markDraftAsFinished(draftId)
         }
     }
 
+    suspend fun markDraftFinishedByJobId(jobId: String) = withContext(Dispatchers.IO) {
+        if (jobId.isNotBlank()) {
+            videoProcessingDraftDao.markDraftAsFinishedByJobId(jobId)
+        }
+    }
+
     suspend fun deleteDraft(draftId: Long) = withContext(Dispatchers.IO) {
         videoProcessingDraftDao.deleteDraftById(draftId)
+    }
+
+    // ---- Background processing jobs ---------------------------------------------
+
+    /** All processing jobs (used by Usage Dashboard and Projects background card). */
+    val processingJobs: Flow<List<ProcessingJobEntity>> = processingJobDao.observeAll()
+
+    fun observeProcessingJob(jobId: String): Flow<ProcessingJobEntity?> = processingJobDao.observe(jobId)
+
+    /**
+     * Persists a ProcessingJobEntity row and enqueues the [com.example.data.worker.VideoProcessingWorker]
+     * under a stable unique name, then returns the job id the caller should observe.
+     */
+    suspend fun enqueueVideoProcessing(
+        title: String,
+        sourceUri: String,
+        transcriptOrPrompt: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String
+    ): String = withContext(Dispatchers.IO) {
+        require(title.isNotBlank()) { "عنوان الفيديو مطلوب." }
+        require(sourceUri.isNotBlank()) { "مصدر الفيديو مطلوب." }
+        require(durationMinutes > 0) { "مدة الفيديو غير صالحة." }
+
+        val jobId = UUID.randomUUID().toString()
+        processingJobDao.upsert(
+            ProcessingJobEntity(
+                jobId = jobId,
+                title = title,
+                sourceUri = sourceUri,
+                transcriptOrPrompt = transcriptOrPrompt,
+                durationMinutes = durationMinutes,
+                targetPlatform = targetPlatform,
+                captionTheme = captionTheme,
+                status = ProcessingJobEntity.STATUS_QUEUED,
+                currentStage = "QUEUED"
+            )
+        )
+        PipelineWorkScheduler.enqueue(
+            context = appContext,
+            uniqueName = "video-processing-$jobId",
+            jobId = jobId,
+            title = title,
+            sourceUrl = sourceUri,
+            transcript = transcriptOrPrompt,
+            durationMinutes = durationMinutes,
+            targetPlatform = targetPlatform,
+            captionTheme = captionTheme
+        )
+        // Housekeeping: drop terminal rows older than one week so the jobs table
+        // does not grow unboundedly.
+        processingJobDao.deleteOlderThan(System.currentTimeMillis() - WEEK_MS)
+        jobId
+    }
+
+    suspend fun cancelVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
+        if (jobId.isBlank()) return@withContext
+        PipelineWorkScheduler.cancel(appContext, "video-processing-$jobId")
+        val current = processingJobDao.get(jobId)
+        if (current != null && current.status == ProcessingJobEntity.STATUS_RUNNING) {
+            processingJobDao.updateState(
+                jobId = jobId,
+                status = ProcessingJobEntity.STATUS_CANCELLED,
+                progress = current.progress,
+                stage = current.currentStage,
+                errorMessage = "تم إلغاء المعالجة."
+            )
+        }
+        videoProcessingDraftDao.markDraftAsFinishedByJobId(jobId)
+    }
+
+    /**
+     * Re-queues a FAILED or CANCELLED processing job with the same source video and
+     * options so the user can recover from transient network/key failures without
+     * re-picking the whole file.
+     */
+    suspend fun retryVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
+        val job = processingJobDao.get(jobId) ?: return@withContext
+        val terminal = job.status == ProcessingJobEntity.STATUS_FAILED ||
+            job.status == ProcessingJobEntity.STATUS_CANCELLED
+        if (!terminal || job.sourceUri.isBlank()) return@withContext
+
+        // A cancelled WorkManager entry must be cleared before the same unique name can run again.
+        PipelineWorkScheduler.cancel(appContext, "video-processing-$jobId")
+        processingJobDao.updateState(
+            jobId = jobId,
+            status = ProcessingJobEntity.STATUS_QUEUED,
+            progress = 0,
+            stage = "QUEUED",
+            errorMessage = "",
+            outputProjectId = 0L
+        )
+        PipelineWorkScheduler.enqueue(
+            context = appContext,
+            uniqueName = "video-processing-$jobId",
+            jobId = jobId,
+            title = job.title,
+            sourceUrl = job.sourceUri,
+            transcript = job.transcriptOrPrompt,
+            durationMinutes = job.durationMinutes,
+            targetPlatform = job.targetPlatform,
+            captionTheme = job.captionTheme
+        )
+    }
+
+    // ---- Pipeline checkpoints ----------------------------------------------------
+
+    /** Persists a stage checkpoint for the unified local pipeline. */
+    suspend fun savePipelineCheckpoint(
+        jobId: String,
+        projectId: Long,
+        stage: String,
+        status: String,
+        progress: Float,
+        message: String,
+        errorMessage: String? = null
+    ) = withContext(Dispatchers.IO) {
+        if (jobId.isBlank()) return@withContext
+        pipelineCheckpointDao.upsert(
+            PipelineCheckpointEntity(
+                jobId = jobId,
+                projectId = projectId,
+                stage = stage,
+                status = status,
+                progress = progress.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f,
+                message = message,
+                errorMessage = errorMessage,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    // ---- Local Speech-to-Text via OpenAI/Groq provider keys -----------------------
+
+    /**
+     * Transcribes a local media file using the user's configured OpenAI/Groq key
+     * (the only providers that advertise the TRANSCRIPTION capability).
+     */
+    suspend fun transcribeLocalMediaDetailed(sourceUrl: String, language: String? = null): Result<Transcript> =
+        withContext(Dispatchers.IO) {
+            val key = _aiProviders.value.firstOrNull {
+                it.isEnabled && it.apiKey.isNotBlank() &&
+                    (it.providerType == AiProviderType.OPENAI.name || it.providerType == AiProviderType.GROQ.name)
+            }?.apiKey
+            if (key.isNullOrBlank()) {
+                return@withContext Result.failure(
+                    IllegalStateException("لا يوجد مفتاح OpenAI أو Groq مفعّل للنسخ الصوتي التفصيلي.")
+                )
+            }
+            val uri = runCatching { Uri.parse(sourceUrl) }.getOrNull()
+                ?: return@withContext Result.failure(IllegalArgumentException("مصدر الوسائط غير صالح."))
+            com.example.data.remote.SpeechToTextService(appContext).transcribe(uri, key, language)
+        }
+
+    // ---- Remote (Gateway) processing result import ---------------------------------
+
+    /**
+     * Imports clips rendered by the Processing Gateway into a real project + clip rows
+     * so the rest of the app (Studio, export, publishing) works identically to local runs.
+     */
+    suspend fun importRemoteProcessingResult(
+        title: String,
+        sourceUri: String,
+        durationMinutes: Int,
+        targetPlatform: String,
+        captionTheme: String,
+        clips: List<ProcessingGatewayClient.RemoteClip>,
+        exportedPaths: Map<String, String>
+    ): Long = withContext(Dispatchers.IO) {
+        require(clips.isNotEmpty()) { "لا توجد مقاطع لاستيرادها." }
+        val safeClips = clips.map { remote ->
+            requireNotNull(remote) { "مقطع Gateway فارغ." }
+        }
+        val bestScore = safeClips.maxOfOrNull { it.score.coerceIn(0, 100) } ?: 0
+        val project = Project(
+            title = title.ifBlank { "مشروع Gateway" },
+            sourceUrl = sourceUri,
+            sourceDurationSec = (durationMinutes * 60).coerceAtLeast(1),
+            status = "COMPLETED",
+            targetPlatform = targetPlatform,
+            captionTheme = captionTheme,
+            clipCount = safeClips.size,
+            bestViralityScore = bestScore
+        )
+        val projectId = projectDao.insertProject(project)
+        val clipEntities = safeClips.mapIndexed { index, remote ->
+            val end = remote.endTimeSec.coerceAtLeast(remote.startTimeSec)
+            Clip(
+                projectId = projectId,
+                title = remote.title.ifBlank { "Clip ${index + 1}" },
+                startTimeSec = remote.startTimeSec.coerceAtLeast(0),
+                endTimeSec = end,
+                durationSec = (remote.durationSec.takeIf { it > 0 } ?: (end - remote.startTimeSec)).coerceAtLeast(1),
+                viralityScore = remote.score.coerceIn(0, 100),
+                hookExplanation = "",
+                transcript = remote.transcript,
+                animatedCaptionsJson = "[]",
+                bRollPromptsJson = "[]",
+                socialCopyJson = "[]",
+                layoutType = "9:16 Full Screen",
+                exportPath = exportedPaths[remote.mediaUrl].orEmpty()
+            )
+        }
+        clipDao.insertClips(clipEntities)
+        projectId
+    }
+
+    // ---- Clip export to device storage ---------------------------------------------
+
+    /**
+     * Renders a real MP4 for a clip on-device with Media3 (trim, aspect ratio,
+     * optional burned-in captions and optional ISM watermark), then returns the file.
+     */
+    suspend fun exportClipToFile(
+        clipId: Long,
+        burnInSubtitles: Boolean,
+        removeWatermark: Boolean,
+        aspectRatioName: String,
+        onProgress: (Int) -> Unit = {}
+    ): File = withContext(Dispatchers.IO) {
+        val clip = clipDao.getClipByIdSync(clipId)
+            ?: throw IllegalStateException("المقطع المطلوب غير موجود.")
+        val project = projectDao.getProjectByIdSync(clip.projectId)
+            ?: throw IllegalStateException("مشروع المقطع غير موجود.")
+        require(project.sourceUrl.isNotBlank()) { "لا يوجد ملف مصدر للتصدير." }
+
+        val sourceUri = Uri.parse(project.sourceUrl)
+        val safeName = clip.title
+            .replace(Regex("[^A-Za-z0-9_\\-\\u0600-\\u06FF ]"), "")
+            .trim()
+            .ifBlank { "ism_clip" }
+            .take(48)
+        val outputDir = File(appContext.cacheDir, "exports").apply { mkdirs() }
+        val output = File(outputDir, "${safeName}_clip${clip.id}.mp4")
+        if (output.exists()) runCatching { output.delete() }
+
+        val (aspectRatio, vertical) = resolveExportAspect(aspectRatioName, clip.layoutType)
+        val cues = if (burnInSubtitles) buildCaptionCues(clip) else emptyList()
+        val watermark = if (removeWatermark) "" else "ISM"
+
+        val exported = com.example.data.video.Media3VideoProcessor(appContext).exportClip(
+            inputUri = sourceUri,
+            outputFile = output,
+            startTimeSec = clip.startTimeSec.coerceAtLeast(0),
+            endTimeSec = clip.endTimeSec,
+            vertical = vertical,
+            aspectRatio = aspectRatio,
+            captionCues = cues,
+            watermarkText = watermark,
+            cropCenterX = null,
+            onProgress = onProgress
+        )
+        require(exported.isFile && exported.length() > 0L) { "فشل إنشاء ملف التصدير." }
+        exported
+    }
+
+    /** Publishes an exported clip file into the public Movies/ISM gallery folder. */
+    suspend fun saveExportToMediaStore(output: File): Uri = withContext(Dispatchers.IO) {
+        require(output.isFile && output.length() > 0L) { "ملف التصدير غير موجود." }
+        val mimeType = "video/mp4"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, output.name)
+                put(MediaStore.Video.Media.MIME_TYPE, mimeType)
+                put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/ISM")
+                put(MediaStore.Video.Media.IS_PENDING, 1)
+            }
+            val collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val uri = appContext.contentResolver.insert(collection, values)
+                ?: throw IllegalStateException("تعذر إنشاء سجل في المعرض.")
+            appContext.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                output.inputStream().use { input -> input.copyTo(outputStream) }
+            } ?: throw IllegalStateException("تعذر كتابة الملف في المعرض.")
+            values.clear()
+            values.put(MediaStore.Video.Media.IS_PENDING, 0)
+            appContext.contentResolver.update(uri, values, null, null)
+            uri
+        } else {
+            @Suppress("DEPRECATION")
+            val galleryDir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                "ISM"
+            ).apply { mkdirs() }
+            val destination = File(galleryDir, output.name)
+            output.inputStream().use { input ->
+                destination.outputStream().use { stream -> input.copyTo(stream) }
+            }
+            MediaScannerConnection.scanFile(
+                appContext,
+                arrayOf(destination.absolutePath),
+                arrayOf(mimeType),
+                null
+            )
+            Uri.fromFile(destination)
+        }
+    }
+
+    private fun resolveExportAspect(layoutName: String, clipLayout: String): Pair<com.example.data.video.ExportAspectRatio, Boolean> {
+        val normalized = layoutName.ifBlank { clipLayout }
+        return when {
+            normalized.contains("1:1", ignoreCase = true) ->
+                com.example.data.video.ExportAspectRatio.SQUARE_1_1 to false
+            normalized.contains("16:9", ignoreCase = true) ->
+                com.example.data.video.ExportAspectRatio.LANDSCAPE_16_9 to false
+            normalized.contains("4:5", ignoreCase = true) ->
+                com.example.data.video.ExportAspectRatio.PORTRAIT_4_5 to true
+            else -> com.example.data.video.ExportAspectRatio.VERTICAL_9_16 to true
+        }
+    }
+
+    private fun buildCaptionCues(clip: Clip): List<com.example.data.video.CaptionCue> {
+        val words = getClipWords(clip).filter { it.startSec >= 0f && it.endSec > it.startSec }
+        if (words.isEmpty()) return emptyList()
+        val cues = mutableListOf<com.example.data.video.CaptionCue>()
+        var lineWords = mutableListOf<com.example.data.model.AnimatedWord>()
+        var lineStart = words.first().startSec
+        fun flushLine() {
+            if (lineWords.isEmpty()) return
+            val end = lineWords.maxOf { it.endSec }
+            cues.add(
+                com.example.data.video.CaptionCue(
+                    text = lineWords.joinToString(" ") { it.word.trim() }.trim(),
+                    startSec = lineStart,
+                    endSec = end,
+                    isHighlight = lineWords.any { it.isHighlight }
+                )
+            )
+            lineWords = mutableListOf()
+        }
+        words.forEach { word ->
+            val willOverflow = lineWords.isNotEmpty() &&
+                (lineWords.size >= 7 || word.startSec - lineStart > 2.4f || word.endSec > lineStart + 3.2f)
+            if (willOverflow) {
+                flushLine()
+                lineStart = word.startSec
+            }
+            if (lineWords.isEmpty()) lineStart = word.startSec
+            lineWords.add(word)
+        }
+        flushLine()
+        return cues.filter { it.text.isNotBlank() }
+    }
+
+    // ---- AI usage tracking ----------------------------------------------------------
+
+    /** Aggregates persisted AI usage for the last [days] days (Usage Dashboard). */
+    fun observeRecentAiUsageAggregates(days: Int): Flow<List<AiUsageAggregate>> {
+        val since = System.currentTimeMillis() - days.coerceIn(1, 365) * DAY_MS
+        return aiUsageDao.observeAggregatesSince(since)
+    }
+
+    private suspend fun persistAiUsage(record: ProviderUsageRecord) {
+        runCatching {
+            aiUsageDao.insert(
+                AiUsageEntity(
+                    provider = record.provider,
+                    model = record.model,
+                    requestType = record.task.name,
+                    inputUnits = record.inputUnits.coerceAtLeast(0L),
+                    outputUnits = record.outputUnits.coerceAtLeast(0L),
+                    latencyMs = record.latencyMs.coerceAtLeast(0L),
+                    success = record.success,
+                    estimatedCostUsd = record.estimatedCostUsd?.takeIf { it > 0.0 },
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    // ---- Social Gateway connection state ---------------------------------------------
+
+    private val _gatewayConfig = MutableStateFlow(loadGatewayConfig())
+    val gatewayConfig: StateFlow<GatewayConfig> = _gatewayConfig.asStateFlow()
+
+    private val _gatewaySnapshot = MutableStateFlow<GatewaySnapshot?>(null)
+    val gatewaySnapshot: StateFlow<GatewaySnapshot?> = _gatewaySnapshot.asStateFlow()
+
+    private val _gatewayError = MutableStateFlow("")
+    val gatewayError: StateFlow<String> = _gatewayError.asStateFlow()
+
+    /** Reads the same SharedPreferences keys that VideoProcessingWorker uses. */
+    private fun loadGatewayConfig(): GatewayConfig {
+        val baseUrl = gatewayPrefs.getString("base_url", "").orEmpty().trim()
+        val encrypted = gatewayPrefs.getString("gateway_token_encrypted", "").orEmpty()
+        val token = if (encrypted.isNotBlank()) {
+            secureKeyManager.decrypt(encrypted).ifBlank { gatewayPrefs.getString("gateway_token", "").orEmpty() }
+        } else {
+            gatewayPrefs.getString("gateway_token", "").orEmpty()
+        }
+        return GatewayConfig(baseUrl = baseUrl, token = token.trim())
+    }
+
+    suspend fun saveGatewayConfig(config: GatewayConfig) = withContext(Dispatchers.IO) {
+        val editor = gatewayPrefs.edit().putString("base_url", config.baseUrl.trim())
+        val token = config.token.trim()
+        if (token.isNotBlank()) {
+            val encrypted = runCatching { secureKeyManager.encrypt(token) }.getOrNull()
+            if (!encrypted.isNullOrBlank()) {
+                editor.putString("gateway_token_encrypted", encrypted)
+                editor.remove("gateway_token")
+            } else {
+                // Keystore unavailable (e.g. very old devices): store plaintext like the worker's legacy fallback.
+                editor.putString("gateway_token", token)
+                editor.remove("gateway_token_encrypted")
+            }
+        } else {
+            editor.remove("gateway_token")
+            editor.remove("gateway_token_encrypted")
+        }
+        editor.apply()
+        _gatewayConfig.value = loadGatewayConfig()
+    }
+
+    suspend fun testGatewayConnection(): Result<String> {
+        val config = _gatewayConfig.value
+        if (config.baseUrl.isBlank()) {
+            return Result.failure(IllegalStateException("احفظ رابط Gateway أولًا."))
+        }
+        return socialGatewayClient.testConnection(config).onSuccess { _gatewayError.value = "" }
+    }
+
+    suspend fun refreshGatewayStatus() {
+        val config = _gatewayConfig.value
+        if (config.baseUrl.isBlank()) return
+        socialGatewayClient.loadSnapshot(config)
+            .onSuccess { snapshot ->
+                _gatewaySnapshot.value = snapshot
+                _gatewayError.value = ""
+            }
+            .onFailure { error ->
+                _gatewaySnapshot.value = null
+                _gatewayError.value = error.localizedMessage ?: error.message ?: "تعذر الاتصال بالبوابة."
+            }
+    }
+
+    private companion object {
+        const val WEEK_MS = 7L * 24L * 60L * 60L * 1_000L
+        const val DAY_MS = 24L * 60L * 60L * 1_000L
     }
 
     suspend fun removeLegacyDemoDataIfPresent() = withContext(Dispatchers.IO) {
