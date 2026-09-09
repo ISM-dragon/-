@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - master
+  # Verify every feature branch with a debug APK build before it merges.
+  pull_request:
   workflow_dispatch:
 
 permissions:
