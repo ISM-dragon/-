@@ -40,6 +40,7 @@ import com.example.ui.theme.OpusHotPink
 import com.example.ui.theme.OpusTextPrimary
 import com.example.ui.theme.OpusTextSecondary
 import com.example.ui.theme.OpusViralEmerald
+import com.example.ui.util.ProcessingUiLabels
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -72,7 +73,7 @@ fun UsageDashboardScreen(
             Spacer(Modifier.height(12.dp))
             Text("Usage Dashboard", color = OpusTextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text(
-                "مراقبة آخر 30 يومًا — جاهزة لإضافة مزودين ونماذج مستقبلًا",
+                "مراقبة استهلاك مزودي الذكاء الاصطناعي والنماذج خلال آخر 30 يومًا",
                 color = OpusTextSecondary,
                 fontSize = 13.sp
             )
@@ -166,7 +167,7 @@ private fun JobProgressRow(job: ProcessingJobEntity) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(job.title, color = OpusTextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
-            Text(job.currentStage.ifBlank { job.status }, color = OpusTextSecondary, fontSize = 11.sp)
+            Text(ProcessingUiLabels.stage(job.currentStage, job.status), color = OpusTextSecondary, fontSize = 11.sp)
             LinearProgressIndicator(
                 progress = { progress },
                 modifier = Modifier.fillMaxWidth().padding(top = 5.dp),

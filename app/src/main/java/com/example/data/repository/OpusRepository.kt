@@ -303,6 +303,40 @@ class OpusRepository(context: Context) {
         videoProcessingDraftDao.markDraftAsFinishedByJobId(jobId)
     }
 
+    /**
+     * Re-queues a FAILED or CANCELLED processing job with the same source video and
+     * options so the user can recover from transient network/key failures without
+     * re-picking the whole file.
+     */
+    suspend fun retryVideoProcessing(jobId: String) = withContext(Dispatchers.IO) {
+        val job = processingJobDao.get(jobId) ?: return@withContext
+        val terminal = job.status == ProcessingJobEntity.STATUS_FAILED ||
+            job.status == ProcessingJobEntity.STATUS_CANCELLED
+        if (!terminal || job.sourceUri.isBlank()) return@withContext
+
+        // A cancelled WorkManager entry must be cleared before the same unique name can run again.
+        PipelineWorkScheduler.cancel(appContext, "video-processing-$jobId")
+        processingJobDao.updateState(
+            jobId = jobId,
+            status = ProcessingJobEntity.STATUS_QUEUED,
+            progress = 0,
+            stage = "QUEUED",
+            errorMessage = "",
+            outputProjectId = 0L
+        )
+        PipelineWorkScheduler.enqueue(
+            context = appContext,
+            uniqueName = "video-processing-$jobId",
+            jobId = jobId,
+            title = job.title,
+            sourceUrl = job.sourceUri,
+            transcript = job.transcriptOrPrompt,
+            durationMinutes = job.durationMinutes,
+            targetPlatform = job.targetPlatform,
+            captionTheme = job.captionTheme
+        )
+    }
+
     // ---- Pipeline checkpoints ----------------------------------------------------
 
     /** Persists a stage checkpoint for the unified local pipeline. */

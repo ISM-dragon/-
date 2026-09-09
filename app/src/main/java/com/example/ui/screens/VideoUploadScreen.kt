@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Error
@@ -357,11 +358,24 @@ fun VideoUploadScreen(
         }
 
         // Active Processing Card (if generating)
-        if (processingStep !is ProcessingStep.Idle) {
+        if (processingStep !is ProcessingStep.Idle || (processingJob != null && isProcessing)) {
             item {
                 ActiveUploadProcessingCard(
                     processingStep = processingStep,
-                    processingJob = processingJob
+                    processingJob = processingJob,
+                    onCancel = {
+                        val jobToCancel = processingJob ?: return@ActiveUploadProcessingCard
+                        if (jobToCancel.status == ProcessingJobEntity.STATUS_QUEUED ||
+                            jobToCancel.status == ProcessingJobEntity.STATUS_RUNNING
+                        ) {
+                            coroutineScope.launch {
+                                repository.cancelVideoProcessing(jobToCancel.jobId)
+                                isProcessing = false
+                                activeProcessingJobId = null
+                                Toast.makeText(context, "أُلغيت المعالجة في الخلفية.", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
                 )
             }
         }
@@ -1114,7 +1128,8 @@ fun VideoUploadScreen(
 @Composable
 private fun ActiveUploadProcessingCard(
     processingStep: ProcessingStep,
-    processingJob: ProcessingJobEntity?
+    processingJob: ProcessingJobEntity?,
+    onCancel: (() -> Unit)? = null
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "upload_pulse")
     val glowAlpha by infiniteTransition.animateFloat(
@@ -1187,9 +1202,10 @@ private fun ActiveUploadProcessingCard(
                 is ProcessingStep.Idle -> 0.0f to "Idle"
             }
             val progress = processingJob?.progress?.coerceIn(0, 100)?.div(100f) ?: fallback.first
-            val message = processingJob?.currentStage?.takeIf { it.isNotBlank() }
-                ?.replace('_', ' ')
-                ?: fallback.second
+            val message = processingJob
+                ?.let { job -> job.currentStage.takeIf { it.isNotBlank() } }
+                ?.let { stage -> ProcessingUiLabels.stage(stage) }
+                ?: if (processingStep is ProcessingStep.Idle) "تجهيز المهمة في الخلفية…" else fallback.second
 
             Text(
                 text = message,
@@ -1209,6 +1225,32 @@ private fun ActiveUploadProcessingCard(
                 color = OpusElectricCyan,
                 trackColor = OpusDarkSurfaceVariant
             )
+
+            val cancellable = onCancel != null && processingJob?.status in setOf(
+                ProcessingJobEntity.STATUS_QUEUED,
+                ProcessingJobEntity.STATUS_RUNNING
+            )
+            if (cancellable) {
+                Spacer(modifier = Modifier.height(4.dp))
+                TextButton(
+                    onClick = { onCancel?.invoke() },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Cancel",
+                        tint = OpusHotPink,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "إلغاء المعالجة",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = OpusHotPink
+                    )
+                }
+            }
         }
     }
 }
@@ -1392,7 +1434,7 @@ private fun UnfinishedDraftBanner(
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "${stage.ifBlank { "قيد الانتظار" }} · ${progress.toInt()}%",
+                    text = "${ProcessingUiLabels.stage(stage, "قيد الانتظار")} · ${progress.toInt()}%",
                     fontSize = 11.sp,
                     color = OpusTextSecondary,
                     modifier = Modifier.weight(1f)

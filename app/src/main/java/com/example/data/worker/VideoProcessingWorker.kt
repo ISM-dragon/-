@@ -271,7 +271,9 @@ class VideoProcessingWorker(
                     message,
                     success = false
                 )
-                MediaUriStabilizer.deleteManagedCopy(applicationContext, sourceUri)
+                // Keep the managed copy of the source on final failure so the new
+                // "retry" action in Projects can re-run the same job without asking
+                // the user to pick the video again.
                 Result.failure(workDataOf(KEY_JOB_ID to jobId, KEY_ERROR to message))
             }
         }
