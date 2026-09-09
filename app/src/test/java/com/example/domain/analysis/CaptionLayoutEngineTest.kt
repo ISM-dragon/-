@@ -42,12 +42,14 @@ class CaptionLayoutEngineTest {
     @Test
     fun wordsAreSortedByStartTimeBeforeGrouping() {
         val words = listOf(
-            word("second", 3f, 4f),
-            word("first", 0f, 1f),
-            word("third", 6f, 7f)
+            word("second", 0.4f, 0.8f),
+            word("first", 0f, 0.4f),
+            word("third", 1.2f, 1.6f)
         )
         val lines = CaptionLayoutEngine.buildLines(words, maxCharacters = 60)
         assertEquals("first second third", lines.single().text)
+        assertEquals(0f, lines.single().startSec, 0.001f)
+        assertEquals(1.6f, lines.single().endSec, 0.001f)
     }
 
     @Test
