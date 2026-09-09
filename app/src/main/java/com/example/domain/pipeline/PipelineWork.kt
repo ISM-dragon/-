@@ -8,7 +8,6 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.Operation
 import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.example.data.worker.VideoProcessingWorker
 import java.util.concurrent.TimeUnit
 
@@ -31,21 +30,23 @@ object PipelineWorkScheduler {
         transcript: String,
         durationMinutes: Int,
         targetPlatform: String,
-        captionTheme: String
+        captionTheme: String,
+        jobId: String? = null
     ): Operation {
         require(uniqueName.isNotBlank()) { "اسم المهمة مطلوب." }
         require(title.isNotBlank()) { "عنوان الفيديو مطلوب." }
         require(sourceUrl.isNotBlank()) { "مصدر الفيديو مطلوب." }
         require(durationMinutes > 0) { "مدة الفيديو غير صالحة." }
 
-        val input = workDataOf(
-            VideoProcessingWorker.KEY_TITLE to title,
-            VideoProcessingWorker.KEY_SOURCE_URI to sourceUrl,
-            VideoProcessingWorker.KEY_TRANSCRIPT to transcript,
-            VideoProcessingWorker.KEY_DURATION_MINUTES to durationMinutes,
-            VideoProcessingWorker.KEY_TARGET_PLATFORM to targetPlatform,
-            VideoProcessingWorker.KEY_CAPTION_THEME to captionTheme
-        )
+        val input = androidx.work.Data.Builder()
+            .putString(VideoProcessingWorker.KEY_TITLE, title)
+            .putString(VideoProcessingWorker.KEY_SOURCE_URI, sourceUrl)
+            .putString(VideoProcessingWorker.KEY_TRANSCRIPT, transcript)
+            .putInt(VideoProcessingWorker.KEY_DURATION_MINUTES, durationMinutes)
+            .putString(VideoProcessingWorker.KEY_TARGET_PLATFORM, targetPlatform)
+            .putString(VideoProcessingWorker.KEY_CAPTION_THEME, captionTheme)
+            .apply { if (!jobId.isNullOrBlank()) putString(VideoProcessingWorker.KEY_JOB_ID, jobId) }
+            .build()
         val request = OneTimeWorkRequestBuilder<VideoProcessingWorker>()
             .setInputData(input)
             .setConstraints(

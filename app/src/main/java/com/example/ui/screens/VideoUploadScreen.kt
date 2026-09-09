@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.HighQuality
@@ -161,14 +162,19 @@ fun VideoUploadScreen(
     val processingJob by processingJobFlow?.collectAsState(initial = null)
         ?: remember { mutableStateOf<ProcessingJobEntity?>(null) }
 
+    // Auto-saved drafts from interrupted runs — surfaced as a resume banner.
+    val unfinishedDrafts by repository.unfinishedDrafts.collectAsState(initial = emptyList())
+
     LaunchedEffect(processingJob?.status, processingJob?.outputProjectId) {
         val completedJob = processingJob
         if (completedJob?.status == ProcessingJobEntity.STATUS_SUCCEEDED && completedJob.outputProjectId > 0L) {
+            repository.markDraftFinishedByJobId(completedJob.jobId)
             isProcessing = false
             activeProcessingJobId = null
             Toast.makeText(context, "اكتملت المعالجة وحُفظ المشروع الحقيقي.", Toast.LENGTH_SHORT).show()
             onProjectCreated(completedJob.outputProjectId)
         } else if (completedJob?.status == ProcessingJobEntity.STATUS_FAILED) {
+            repository.markDraftFinishedByJobId(completedJob.jobId)
             isProcessing = false
             Toast.makeText(context, "فشلت المعالجة: ${completedJob.errorMessage}", Toast.LENGTH_LONG).show()
         }
@@ -356,6 +362,35 @@ fun VideoUploadScreen(
                 ActiveUploadProcessingCard(
                     processingStep = processingStep,
                     processingJob = processingJob
+                )
+            }
+        }
+
+        // Resume banner for an auto-saved draft from an interrupted run
+        val latestDraft = unfinishedDrafts.firstOrNull()
+        if (processingStep is ProcessingStep.Idle && latestDraft != null) {
+            item {
+                UnfinishedDraftBanner(
+                    title = latestDraft.title,
+                    stage = latestDraft.lastProcessingStep,
+                    progress = latestDraft.progressPercent,
+                    onResume = {
+                        // Restore the previous styling choices; the user still needs to
+                        // pick the video again if the app restarted since the original run.
+                        selectedCaptionTheme = latestDraft.captionTheme
+                        selectedLayout = latestDraft.targetPlatform
+                        autoDetectAiTemplate = false
+                        Toast.makeText(
+                            context,
+                            "استُعيدت إعدادات المسودة — اختر الفيديو للمتابعة.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    },
+                    onDiscard = {
+                        coroutineScope.launch {
+                            repository.deleteDraft(latestDraft.id)
+                        }
+                    }
                 )
             }
         }
@@ -1005,6 +1040,22 @@ fun VideoUploadScreen(
                                 }
                                 activeProcessingJobId = jobIds.lastOrNull()
                                 isProcessing = true
+                                // Persist an auto-save draft so an interrupted run can be
+                                // resumed (or monitored) after the app restarts.
+                                val draftJobId = activeProcessingJobId
+                                if (draftJobId != null && batchUris.isNotEmpty()) {
+                                    repository.saveProcessingDraft(
+                                        jobId = draftJobId,
+                                        title = videoTitle,
+                                        sourceUrl = batchUris.first().toString(),
+                                        transcriptPrompt = "Local uploaded video: $videoTitle",
+                                        durationMinutes = calcDurationMin,
+                                        targetPlatform = appliedLayout,
+                                        captionTheme = appliedCaptionTheme,
+                                        lastStep = "QUEUED",
+                                        progressPercent = 0f
+                                    )
+                                }
                                 Toast.makeText(context, "أضيفت المعالجة إلى الطابور وستستمر في الخلفية.", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
                                 isProcessing = false
@@ -1298,4 +1349,80 @@ private fun formatDuration(millis: Long): String {
 private fun getFileExtension(name: String?): String {
     if (name.isNullOrBlank()) return "MP4"
     return name.substringAfterLast(".", "MP4").uppercase()
+}
+
+@Composable
+private fun UnfinishedDraftBanner(
+    title: String,
+    stage: String,
+    progress: Float,
+    onResume: () -> Unit,
+    onDiscard: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = OpusDarkSurfaceHighlight),
+        border = androidx.compose.foundation.BorderStroke(1.dp, OpusGold.copy(alpha = 0.55f))
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Resume draft",
+                    tint = OpusGold
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "مسودة معالجة غير مكتملة",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = OpusTextPrimary
+                )
+            }
+            Text(
+                text = title.ifBlank { "فيديو بدون عنوان" },
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = OpusTextPrimary
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "${stage.ifBlank { "قيد الانتظار" }} · ${progress.toInt()}%",
+                    fontSize = 11.sp,
+                    color = OpusTextSecondary,
+                    modifier = Modifier.weight(1f)
+                )
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 100f) / 100f },
+                    modifier = Modifier
+                        .height(6.dp)
+                        .fillMaxWidth(0.45f),
+                    color = OpusGold,
+                    trackColor = OpusTextSecondary.copy(alpha = 0.2f)
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onResume,
+                    colors = ButtonDefaults.buttonColors(containerColor = OpusPrimaryViolet),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("استئناف الإعدادات", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+                OutlinedButton(
+                    onClick = onDiscard,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = OpusHotPink),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, OpusHotPink)
+                ) {
+                    Text("حذف المسودة", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        }
+    }
 }
