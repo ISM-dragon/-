@@ -317,7 +317,8 @@ class VideoProcessingWorker(
                     jobId = jobId,
                     title = title,
                     sourceUri = sourceUri,
-                    transcriptOrPrompt = transcriptOrPrompt,
+                    // Remote mode: the Gateway owns ASR; the transcript prompt is not needed.
+                    transcriptOrPrompt = "",
                     durationMinutes = durationMinutes,
                     targetPlatform = targetPlatform,
                     captionTheme = captionTheme,
